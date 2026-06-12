@@ -1,0 +1,419 @@
+"""
+局域网文件传输工具 - 后端服务
+启动方式: python main.py
+访问地址: http://localhost:8080 (或局域网IP:8080)
+"""
+
+import asyncio
+import json
+import os
+import shutil
+import socket
+import time
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File as FastAPIFile, Form, Request
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.exceptions import HTTPException
+import uvicorn
+
+# ========== 配置 ==========
+UPLOAD_DIR = Path(__file__).parent / "uploads"
+FILE_RETENTION_DAYS = 3          # 文件保留天数
+MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+HOST = "0.0.0.0"                # 监听所有网卡（局域网可访问）
+PORT = 8080
+
+
+# ========== 全局状态 ==========
+connected_clients: dict[str, WebSocket] = {}   # client_id -> websocket
+client_info: dict[str, dict] = {}              # client_id -> {name, ip, connect_time}
+
+# 文件元数据存储：filename -> {target_client_id, target_name, sender_client_id, sender_name, created_at}
+file_metadata: dict[str, dict] = {}
+
+
+def _load_file_metadata():
+    """从磁盘加载已有的文件元数据"""
+    meta_dir = UPLOAD_DIR / ".metadata"
+    if not meta_dir.exists():
+        return
+    for f in meta_dir.iterdir():
+        if f.suffix == ".json":
+            filename = f.stem  # 原始文件名（可能含uuid后缀）
+            try:
+                with open(f, "r", encoding="utf-8") as mf:
+                    file_metadata[filename] = json.load(mf)
+            except Exception:
+                pass
+
+
+def _save_file_metadata():
+    """将文件元数据持久化到磁盘"""
+    meta_dir = UPLOAD_DIR / ".metadata"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    for filename, meta in file_metadata.items():
+        meta_file = meta_dir / f"{filename}.json"
+        with open(meta_file, "w", encoding="utf-8") as mf:
+            json.dump(meta, mf, ensure_ascii=False)
+
+
+def _delete_file_metadata(filename: str):
+    """删除文件元数据"""
+    meta_file = UPLOAD_DIR / ".metadata" / f"{filename}.json"
+    if meta_file.exists():
+        try:
+            meta_file.unlink()
+        except Exception:
+            pass
+    file_metadata.pop(filename, None)
+
+
+def _get_client_id_by_ip(ip: str) -> str | None:
+    """通过 IP 反查当前连接的 client_id"""
+    for cid, info in client_info.items():
+        if info["ip"] == ip:
+            return cid
+    return None
+
+
+def _is_authorized(client_id: str, filename: str) -> bool:
+    """检查某客户端是否有权限访问指定文件（发送方或接收方均可）"""
+    meta = file_metadata.get(filename)
+    if meta is None:
+        # 没有元数据的旧文件，默认允许访问（兼容已有数据）
+        return True
+    return (meta.get("sender_client_id") == client_id or
+            meta.get("target_client_id") == client_id)
+
+
+def _extract_sender_ip(request: Request) -> str:
+    """提取请求来源 IP"""
+    return (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+            or (request.client.host if request.client else "unknown"))
+
+
+def cleanup_old_files():
+    """清理超过保留期限的文件"""
+    if not UPLOAD_DIR.exists():
+        return
+    now = time.time()
+    max_age = FILE_RETENTION_DAYS * 86400  # 秒
+    for f in UPLOAD_DIR.iterdir():
+        if f.is_file() and (now - f.stat().st_mtime) > max_age:
+            try:
+                f.unlink()
+                print(f"[清理] 已删除过期文件: {f.name}")
+            except Exception as e:
+                print(f"[清理] 删除失败 {f.name}: {e}")
+
+
+async def _broadcast_device_list():
+    """向所有在线设备广播当前设备列表"""
+    devices = [
+        {"id": cid, "name": info["name"], "ip": info["ip"]}
+        for cid, info in client_info.items()
+    ]
+    payload = {"type": "device_list", "devices": devices}
+    await _broadcast_to_all(payload)
+
+
+async def _broadcast_to_all(payload: dict):
+    """向所有在线 WebSocket 发送消息"""
+    msg = json.dumps(payload, ensure_ascii=False)
+    for ws in list(connected_clients.values()):
+        try:
+            await ws.send_text(msg)
+        except Exception:
+            pass
+
+
+def _get_unique_device_name(base: str) -> str:
+    """确保同一网络下设备名唯一，自动加序号"""
+    used = set(info["name"] for info in client_info.values())
+    name = base
+    counter = 1
+    while name in used and len(connected_clients) > 0:
+        name = f"{base}#{counter}"
+        counter += 1
+    return name
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """启动时创建目录、加载元数据并定期清理"""
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    _load_file_metadata()  # 恢复持久化的文件元数据
+    cleanup_old_files()
+
+    async def periodic_cleanup():
+        while True:
+            await asyncio.sleep(3600)
+            cleanup_old_files()
+
+    task = asyncio.create_task(periodic_cleanup())
+    yield
+    task.cancel()
+
+
+# ========== FastAPI 应用 ==========
+app = FastAPI(title="文件传输工具", lifespan=lifespan)
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    """返回前端页面"""
+    with open(os.path.join(os.path.dirname(__file__), "templates/index.html"), "r", encoding="utf-8") as f:
+        return f.read()
+
+
+# ========== WebSocket - 设备连接与消息 ==========
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket 端点：处理设备注册、发现、消息"""
+    await websocket.accept()
+
+    client_id = str(uuid.uuid4())[:8]
+    raw_name = ""
+    try:
+        data = await asyncio.wait_for(websocket.receive_text(), timeout=10)
+        parsed = json.loads(data)
+        raw_name = parsed.get("name", "未知设备")
+    except Exception:
+        pass
+
+    base_name = (raw_name or "未知设备").strip()[:20]
+    device_name = _get_unique_device_name(base_name)
+
+    connected_clients[client_id] = websocket
+    client_info[client_id] = {
+        "name": device_name,
+        "ip": str(websocket.client.host) if websocket.client else "unknown",
+        "connect_time": datetime.now().isoformat(),
+    }
+
+    print(f"[设备] 已连接: {device_name} (ID:{client_id})")
+
+    # 将 client_id 发送给客户端（用于后续 API 请求的权限校验）
+    await websocket.send_text(json.dumps({
+        "type": "registered",
+        "client_id": client_id,
+        "my_name": device_name,
+    }))
+
+    # 广播：有新设备上线
+    await _broadcast_device_list()
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+
+            try:
+                msg = json.loads(data)
+                msg_type = msg.get("type", "")
+
+                if msg_type == "message":
+                    payload = {
+                        "type": "message",
+                        "from_name": client_info[client_id]["name"],
+                        "content": msg.get("content", ""),
+                        "timestamp": datetime.now().strftime("%H:%M"),
+                    }
+                    await _broadcast_to_all(payload)
+
+                elif msg_type == "ping":
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+
+            except json.JSONDecodeError:
+                pass
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        connected_clients.pop(client_id, None)
+        removed_name = client_info.pop(client_id, {}).get("name", "")
+        print(f"[设备] 已断开: {removed_name}")
+        await _broadcast_device_list()
+
+
+# ========== HTTP - 文件上传与列表 ==========
+@app.post("/upload")
+async def upload_file(
+    request: Request,
+    file: UploadFile = FastAPIFile(...),
+    target_device: str = Form(None),
+    sender_id: str = Form(""),          # 前端传入发送方的 WebSocket client_id
+):
+    """上传文件"""
+    sender_ip = _extract_sender_ip(request)
+
+    file.file.seek(0, 2)
+    size = file.file.tell()
+    file.file.seek(0)
+
+    if size > MAX_FILE_SIZE:
+        return {"error": f"文件过大，最大支持 {MAX_FILE_SIZE // (1024*1024*1024)}GB"}
+
+    now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    original_name = file.filename or "unknown"
+    safe_original = "".join(c if c.isalnum() or c in "._- " else "_" for c in original_name)[:100]
+
+    device_id = target_device or "未知设备"
+    sender_cid = sender_id.strip() or _get_client_id_by_ip(sender_ip) or ""
+    sender_label = client_info.get(sender_cid, {}).get("name", "") if sender_cid else "未知设备"
+    target_label = client_info.get(device_id, {}).get("name", device_id) if device_id else "未知设备"
+
+    filename = f"{target_label}_{now_str}_{safe_original}"
+    filepath = UPLOAD_DIR / filename
+
+    if filepath.exists():
+        name_part, ext = os.path.splitext(filename)
+        filename = f"{name_part}_{uuid.uuid4().hex[:6]}{ext}"
+        filepath = UPLOAD_DIR / filename
+
+    try:
+        with open(filepath, "wb") as out_file:
+            shutil.copyfileobj(file.file, out_file)
+    except Exception as e:
+        return {"error": f"保存失败: {str(e)}"}
+
+    # ── 记录文件元数据（权限控制） ──
+    target_cid = device_id if client_info.get(device_id) else ""
+    file_metadata[filename] = {
+        "target_client_id": target_cid,
+        "target_name": target_label,
+        "sender_client_id": sender_cid,
+        "sender_name": sender_label,
+        "created_at": datetime.now().isoformat(),
+    }
+    _save_file_metadata()
+
+    await _broadcast_to_all({
+        "type": "new_file",
+        "filename": filename,
+        "size": size,
+        "from_name": sender_label,
+        "to_name": target_label,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    })
+
+    return {"ok": True, "filename": filename, "size": size}
+
+
+@app.get("/files")
+async def list_files(request: Request, client_id: str = ""):
+    """列出当前用户有权访问的文件（发送方或接收方的文件）"""
+    sender_ip = _extract_sender_ip(request)
+    cid = client_id.strip() or _get_client_id_by_ip(sender_ip) or ""
+
+    now = time.time()
+    max_age = FILE_RETENTION_DAYS * 86400
+
+    files = []
+    for f in sorted(UPLOAD_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+        if not f.is_file():
+            continue
+        age = now - f.stat().st_mtime
+        if age > max_age:
+            continue
+        # ── 权限过滤：只显示该用户有权访问的文件 ──
+        if cid and not _is_authorized(cid, f.name):
+            continue
+
+        size_bytes = f.stat().st_size
+        meta = file_metadata.get(f.name, {})
+        files.append({
+            "name": f.name,
+            "size": size_bytes,
+            "time": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+            "expires_at": (datetime.fromtimestamp(f.stat().st_mtime) + timedelta(days=FILE_RETENTION_DAYS)).strftime("%Y-%m-%d %H:%M"),
+            "role": "sent" if meta.get("sender_client_id") == cid else ("received" if meta.get("target_client_id") == cid else None),
+        })
+
+    return {"files": files}
+
+
+@app.get("/download/{filename:path}")
+async def download_file(request: Request, filename: str):
+    """下载文件（仅发送方或接收方可访问）"""
+    sender_ip = _extract_sender_ip(request)
+    cid = _get_client_id_by_ip(sender_ip) or ""
+
+    # ── 权限检查 ──
+    if not _is_authorized(cid, filename):
+        raise HTTPException(status_code=403, detail="无权访问此文件（仅发送方和接收方可下载）")
+
+    filepath = UPLOAD_DIR / filename
+    if not filepath.exists():
+        return {"error": "文件不存在"}
+    parts = filename.split("_", 2)
+    original = parts[2] if len(parts) >= 3 else filename
+    return FileResponse(filepath, filename=original, media_type="application/octet-stream")
+
+
+@app.post("/delete/{filename:path}")
+async def delete_file(request: Request, filename: str, client_id: str = ""):
+    """删除文件（仅发送方或接收方可操作）"""
+    sender_ip = _extract_sender_ip(request)
+    cid = client_id.strip() or _get_client_id_by_ip(sender_ip) or ""
+
+    # ── 权限检查 ──
+    if not _is_authorized(cid, filename):
+        raise HTTPException(status_code=403, detail="无权删除此文件")
+
+    filepath = UPLOAD_DIR / filename
+    if not filepath.exists():
+        return {"error": "文件不存在"}
+    try:
+        filepath.unlink()
+        _delete_file_metadata(filename)
+        _save_file_metadata()
+        await _broadcast_to_all({"type": "file_deleted", "filename": filename})
+        return {"ok": True}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/health")
+async def health():
+    """健康检查"""
+    return {
+        "status": "ok",
+        "online_devices": len(connected_clients),
+        "storage_files": len([f for f in UPLOAD_DIR.iterdir() if f.is_file()]),
+    }
+
+
+# ========== 启动入口 ==========
+if __name__ == "__main__":
+    print("=" * 60)
+    print("  [FileTransfer] 局域网文件传输工具")
+    print("=" * 60)
+
+    local_ip = ""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        local_ip = "127.0.0.1"
+
+    print(f"\n  [Local]   http://localhost:{PORT}")
+    print(f"  [LAN]     http://{local_ip}:{PORT}")
+    print(f"\n  [Storage] {UPLOAD_DIR.absolute()}")
+    print(f"  [TTL]     {FILE_RETENTION_DAYS} days")
+    print(f"  [MaxSize] {MAX_FILE_SIZE // (1024*1024*1024)} GB")
+
+    if local_ip != "127.0.0.1":
+        print(f"\n  [Public IP]")
+        print(f"     Router port-forward: {PORT} -> {local_ip}")
+        print(f"     Public URL: http://<your-IP>:{PORT}")
+
+    print("\n  Ctrl+C to stop\n")
+    print("=" * 60)
+
+    uvicorn.run(app, host=HOST, port=PORT)

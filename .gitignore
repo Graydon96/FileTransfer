@@ -1,0 +1,50 @@
+# Python bytecode/cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python packaging/build outputs
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Test, coverage, and type-check caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+
+# Local environment/config files
+.env
+.env.*
+!.env.example
+
+# Runtime uploads and generated metadata
+uploads/*
+!uploads/.gitkeep
+
+# Logs and local runtime files
+*.log
+logs/
+*.pid
+
+# Editor/IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📁 文件传输工具</title>
+<style>
+/* ========== 全局样式 ========== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; background: #f0f2f5; color: #333; min-height: 100vh; }
+
+/* ========== 顶部导航 ========== */
+.top-bar { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 12px rgba(0,0,0,0.15); position: sticky; top: 0; z-index: 100; }
+.top-bar h1 { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.top-bar .status { font-size: 13px; opacity: 0.9; display: flex; align-items: center; gap: 6px; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: pulse 2s infinite; }
+.status-dot.offline { background: #f87171; animation: none; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* ========== 主布局 ========== */
+.main-container { max-width: 1200px; margin: 0 auto; padding: 20px; display: grid; grid-template-columns: 300px 1fr; gap: 20px; min-height: calc(100vh - 64px); }
+@media (max-width: 768px) { .main-container { grid-template-columns: 1fr; } }
+
+/* ========== 侧边栏（设备列表） ========== */
+.sidebar { background: white; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); overflow: hidden; display: flex; flex-direction: column; height: fit-content; max-height: calc(100vh - 104px); position: sticky; top: 64px; }
+.sidebar-header { padding: 16px; border-bottom: 1px solid #eee; font-weight: 600; display: flex; align-items: center; gap: 8px; background: #fafafa; }
+.device-list { flex: 1; overflow-y: auto; padding: 8px; }
+.device-item { padding: 12px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; margin-bottom: 4px; }
+.device-item:hover { background: #f0f7ff; transform: translateX(4px); }
+.device-item.selected { background: #e8f0fe; border-left: 3px solid #667eea; }
+.device-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; color: white; flex-shrink: 0; }
+.device-info { overflow: hidden; }
+.device-name { font-weight: 500; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.device-ip { font-size: 12px; color: #999; margin-top: 2px; }
+.empty-devices { padding: 30px 16px; text-align: center; color: #bbb; font-size: 14px; }
+
+/* ========== 内容区域 ========== */
+.content-area { display: flex; flex-direction: column; gap: 20px; }
+
+/* ========== 上传区域 ========== */
+.upload-section { background: white; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); overflow: hidden; }
+.section-header { padding: 16px; border-bottom: 1px solid #eee; font-weight: 600; display: flex; align-items: center; justify-content: space-between; background: #fafafa; cursor: pointer; user-select: none; }
+.section-header .toggle-icon { transition: transform 0.3s; font-size: 12px; }
+.section-header.collapsed .toggle-icon { transform: rotate(-90deg); }
+.section-body { padding: 20px; transition: max-height 0.3s ease; overflow: hidden; }
+.section-body.hidden { max-height: 0 !important; padding: 0 20px; }
+
+.drop-zone { border: 2px dashed #d0d7de; border-radius: 10px; padding: 40px 20px; text-align: center; cursor: pointer; transition: all 0.3s; background: #fafbfc; }
+.drop-zone:hover, .drop-zone.dragover { border-color: #667eea; background: #f5f3ff; }
+.drop-zone-icon { font-size: 40px; margin-bottom: 12px; }
+.drop-zone-text { color: #666; font-size: 14px; line-height: 1.8; }
+.drop-zone-text strong { color: #667eea; }
+
+.file-input { display: none; }
+
+.upload-progress { margin-top: 12px; display: none; }
+.upload-progress.active { display: block; }
+.progress-bar-container { height: 6px; background: #eee; border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
+.progress-bar-fill { height: 100%; background: linear-gradient(90deg, #667eea, #764ba2); border-radius: 3px; transition: width 0.3s; }
+.progress-text { font-size: 12px; color: #888; text-align: center; }
+
+/* ========== 聊天区域 ========== */
+.chat-section { background: white; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); overflow: hidden; flex: 1; display: flex; flex-direction: column; min-height: 300px; }
+.chat-messages { padding: 16px; overflow-y: auto; flex: 1; max-height: 400px; background: #fafbfc; }
+.message { margin-bottom: 12px; display: flex; gap: 8px; animation: fadeInUp 0.3s ease; }
+@keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.message-avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; color: white; flex-shrink: 0; margin-top: 2px; }
+.message-bubble { background: #f0f7ff; padding: 10px 14px; border-radius: 0 10px 10px 10px; max-width: 70%; font-size: 14px; line-height: 1.5; }
+.message-sender { font-weight: 600; font-size: 12px; color: #667eea; margin-bottom: 3px; }
+.message-time { font-size: 11px; color: #bbb; margin-top: 4px; }
+.chat-input-area { display: flex; padding: 12px 16px; border-top: 1px solid #eee; gap: 8px; }
+.chat-input { flex: 1; border: 1px solid #ddd; border-radius: 8px; padding: 10px 14px; font-size: 14px; outline: none; transition: border-color 0.2s; }
+.chat-input:focus { border-color: #667eea; }
+.send-btn { background: linear-gradient(135deg, #667eea, #764ba2); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; transition: opacity 0.2s; }
+.send-btn:hover { opacity: 0.9; }
+.send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.no-chat-hint { text-align: center; color: #bbb; padding: 40px 16px; font-size: 13px; }
+
+/* ========== 文件管理区域 ========== */
+.files-section { background: white; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); overflow: hidden; }
+.file-list { padding: 8px 16px; max-height: 350px; overflow-y: auto; }
+.file-item { display: flex; align-items: center; padding: 12px; border-radius: 8px; transition: background 0.2s; gap: 12px; }
+.file-item:hover { background: #f5f7fa; }
+.file-icon { font-size: 24px; flex-shrink: 0; }
+.file-info { flex: 1; overflow: hidden; }
+.file-name { font-weight: 500; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-meta { font-size: 12px; color: #999; margin-top: 3px; display: flex; gap: 12px; }
+.file-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.btn-download, .btn-delete { padding: 6px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; border: none; transition: opacity 0.2s; text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+.btn-download { background: #e8f5e9; color: #2e7d32; }
+.btn-download:hover { opacity: 0.8; }
+.btn-delete { background: #fce4ec; color: #c62828; }
+.btn-delete:hover { opacity: 0.8; }
+.empty-files { padding: 30px; text-align: center; color: #bbb; font-size: 14px; }
+
+/* ========== 通知气泡 ========== */
+.toast-container { position: fixed; top: 80px; right: 20px; z-index: 999; display: flex; flex-direction: column; gap: 8px; }
+.toast { background: white; border-radius: 10px; padding: 14px 18px; box-shadow: 0 4px 20px rgba(0,0,0,0.15); animation: slideInRight 0.3s ease; max-width: 340px; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.toast.hiding { animation: slideOutRight 0.3s ease forwards; }
+@keyframes slideInRight { from { opacity: 0; transform: translateX(60px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes slideOutRight { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(60px); } }
+
+/* ========== 滚动条美化 ========== */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #ccc; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #aaa; }
+
+/* ========== 选择设备提示条 ========== */
+.selected-device-bar { background: linear-gradient(90deg, #e8f0fe, #f0f7ff); padding: 10px 16px; border-radius: 8px; display: none; align-items: center; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+.selected-device-bar.active { display: flex; }
+.selected-device-name { font-weight: 600; color: #667eea; }
+.clear-selection { cursor: pointer; color: #999; padding: 2px 8px; border-radius: 4px; transition: background 0.2s; }
+.clear-selection:hover { background: rgba(0,0,0,0.05); }
+
+/* ========== Tab 切换 ========== */
+.tab-bar { display: flex; gap: 0; margin-bottom: -1px; position: relative; z-index: 1; }
+.tab-btn { padding: 12px 24px; background: #eee; border: none; cursor: pointer; font-size: 14px; font-weight: 500; color: #666; transition: all 0.2s; border-radius: 8px 8px 0 0; }
+.tab-btn.active { background: white; color: #667eea; box-shadow: 0 -2px 0 #667eea; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ========== 设备选择弹窗 ========== */
+.modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); z-index: 200; display: none; align-items: center; justify-content: center; }
+.modal-overlay.active { display: flex; }
+.modal { background: white; border-radius: 16px; padding: 28px; max-width: 380px; width: 90%; box-shadow: 0 10px 40px rgba(0,0,0,0.2); animation: fadeInUp 0.3s ease; }
+.modal h3 { margin-bottom: 16px; font-size: 18px; color: #333; }
+.modal-device-item { padding: 12px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 10px; transition: all 0.2s; margin-bottom: 6px; }
+.modal-device-item:hover { background: #f0f7ff; transform: translateX(4px); }
+.modal-close { margin-top: 16px; width: 100%; padding: 10px; border: none; background: #eee; border-radius: 8px; cursor: pointer; font-size: 14px; transition: background 0.2s; }
+.modal-close:hover { background: #ddd; }
+
+</style>
+</head>
+<body>
+
+<!-- ====== 顶部导航 ====== -->
+<div class="top-bar">
+    <h1>📁 文件传输工具</h1>
+    <div class="status">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">连接中...</span>
+    </div>
+</div>
+
+<!-- ====== 主布局 ====== -->
+<div class="main-container">
+    <!-- 侧边栏：设备列表 -->
+    <div class="sidebar">
+        <div class="sidebar-header">👥 在线设备 (<span id="deviceCount">0</span>)</div>
+        <div class="device-list" id="deviceList">
+            <div class="empty-devices">等待其他设备连接...</div>
+        </div>
+    </div>
+
+    <!-- 内容区域 -->
+    <div class="content-area">
+        <!-- Tab 切换 -->
+        <div class="tab-bar">
+            <button class="tab-btn active" data-tab="upload">📤 上传文件</button>
+            <button class="tab-btn" data-tab="chat">💬 发送消息</button>
+            <button class="tab-btn" data-tab="files">📂 文件管理</button>
+        </div>
+
+        <!-- Tab: 上传 -->
+        <div class="tab-content active" id="tab-upload">
+            <div class="selected-device-bar" id="uploadTargetBar">
+                <span>目标设备：<span class="selected-device-name" id="uploadTargetName"></span></span>
+                <span class="clear-selection" onclick="clearUploadTarget()">✕ 清除</span>
+            </div>
+            <div class="upload-section">
+                <div class="drop-zone" id="dropZone">
+                    <div class="drop-zone-icon">📂</div>
+                    <div class="drop-zone-text">
+                        拖拽文件到此处，或<strong>点击选择文件</strong><br>
+                        支持任意类型文件，最大 <span style="font-weight:600;color:#c62828;">2 GB</span>
+                    </div>
+                    <input type="file" class="file-input" id="fileInput">
+                </div>
+                <div class="upload-progress" id="uploadProgress">
+                    <div class="progress-bar-container">
+                        <div class="progress-bar-fill" id="progressFill" style="width:0%"></div>
+                    </div>
+                    <div class="progress-text" id="progressText">上传中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: 聊天 -->
+        <div class="tab-content" id="tab-chat">
+            <div class="selected-device-bar" id="chatTargetBar">
+                <span>目标设备：<span class="selected-device-name" id="chatTargetName"></span></span>
+                <span class="clear-selection" onclick="clearChatTarget()">✕ 清除</span>
+            </div>
+            <div class="chat-section">
+                <div class="chat-messages" id="chatMessages">
+                    <div class="no-chat-hint">选择一个设备，就可以开始发送消息了 💬</div>
+                </div>
+                <div class="chat-input-area">
+                    <input type="text" class="chat-input" id="chatInput" placeholder="输入消息..." maxlength="500" disabled>
+                    <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>发送</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: 文件管理 -->
+        <div class="tab-content" id="tab-files">
+            <div class="files-section">
+                <div class="section-header" onclick="toggleSection(this)">
+                    📂 已存储的文件（3天内有效）
+                    <span class="toggle-icon">▼</span>
+                </div>
+                <div class="file-list" id="fileList">
+                    <div class="empty-files">加载中...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ====== 弹窗：选择设备 ====== -->
+<div class="modal-overlay" id="deviceModal">
+    <div class="modal">
+        <h3>📌 选择目标设备</h3>
+        <div id="modalDeviceList"></div>
+        <button class="modal-close" onclick="closeModal()">取消</button>
+    </div>
+</div>
+
+<!-- ====== 通知气泡 ====== -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ========== 全局状态 ==========
+let ws = null;
+let myClientId = '';         // WebSocket client_id（用于 API 权限校验）
+let myName = prompt('请输入你的设备名称（如：我的电脑）', 'My Device') || 'My Device';
+let devices = [];       // 在线设备列表 [{id, name, ip}]
+let selectedDevice = null;   // {id, name}
+let uploadTarget = null;
+let chatTarget = null;
+const avatarColors = ['#667eea','#764ba2','#f093fb','#4facfe','#43e97b','#fa709a','#fee140','#a18cd1','#fbc2eb','#ff9a9e'];
+
+// ========== 设备名称颜色 ==========
+function getAvatarColor(name) {
+    let hash = 0;
+    for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    return avatarColors[Math.abs(hash) % avatarColors.length];
+}
+
+// ========== WebSocket 连接 ==========
+function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+    ws.onopen = () => {
+        document.getElementById('statusDot').classList.remove('offline');
+        document.getElementById('statusText').textContent = '已连接';
+        // 发送设备名
+        ws.send(JSON.stringify({ type: 'register', name: myName }));
+        showToast('✅', '已连接到服务器');
+    };
+
+    ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        switch (msg.type) {
+            case 'registered':
+                myClientId = msg.client_id;
+                showToast('🔑', `已注册，ID: ${myClientId}`);
+                break;
+            case 'device_list':
+                devices = msg.devices;
+                renderDeviceList();
+                break;
+            case 'message':
+                // 只接收发给选中设备或群发的消息（所有在线设备可见）
+                addChatMessage(msg.from_name, msg.content, msg.timestamp);
+                break;
+            case 'new_file':
+                if (msg.to_name) {
+                    showToast('📁', `${msg.from_name} → ${msg.to_name}: ${msg.filename}`);
+                } else {
+                    showToast('📁', `${msg.from_name} 上传了文件: ${msg.filename}`);
+                }
+                loadFiles();
+                break;
+            case 'file_deleted':
+                loadFiles();
+                break;
+        }
+    };
+
+    ws.onclose = () => {
+        document.getElementById('statusDot').classList.add('offline');
+        document.getElementById('statusText').textContent = '已断开，重连中...';
+        setTimeout(connectWS, 3000); // 3秒后重试
+    };
+
+    ws.onerror = () => {
+        document.getElementById('statusDot').classList.add('offline');
+        document.getElementById('statusText').textContent = '连接异常';
+    };
+}
+
+// ========== 渲染设备列表 ==========
+function renderDeviceList() {
+    const el = document.getElementById('deviceList');
+    const countEl = document.getElementById('deviceCount');
+    countEl.textContent = devices.length;
+
+    if (devices.length === 0) {
+        el.innerHTML = '<div class="empty-devices">等待其他设备连接...</div>';
+        return;
+    }
+
+    el.innerHTML = devices.map(d => `
+        <div class="device-item ${selectedDevice?.id === d.id ? 'selected' : ''}" onclick="selectDevice('${d.id}', '${escHtml(d.name)}')">
+            <div class="device-avatar" style="background:${getAvatarColor(d.name)}">${d.name.charAt(0).toUpperCase()}</div>
+            <div class="device-info">
+                <div class="device-name">${escHtml(d.name)}</div>
+                <div class="device-ip">${d.ip}</div>
+            </div>
+        </div>
+    `).join('');
+}
+
+function selectDevice(id, name) {
+    selectedDevice = { id, name };
+    renderDeviceList();
+    // 启用聊天输入框和发送按钮
+    document.getElementById('chatInput').disabled = false;
+    document.getElementById('sendBtn').disabled = false;
+    // 移除聊天区域的提示语
+    const hint = document.querySelector('.no-chat-hint');
+    if (hint) hint.style.display = 'none';
+    showToast('📌', `已选择设备: ${name}`);
+}
+
+// ========== 弹窗：选择上传/聊天目标 ==========
+let modalCallback = null;
+function openModal(callback) {
+    if (devices.length === 0) {
+        showToast('⚠️', '没有在线设备，无法传输');
+        return;
+    }
+    modalCallback = callback;
+    const el = document.getElementById('modalDeviceList');
+    el.innerHTML = devices.map(d => `
+        <div class="modal-device-item" onclick="chooseModalDevice('${d.id}', '${escHtml(d.name)}')">
+            <div class="device-avatar" style="background:${getAvatarColor(d.name)};width:32px;height:32px;font-size:14px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;">${d.name.charAt(0).toUpperCase()}</div>
+            <span>${escHtml(d.name)}</span>
+        </div>
+    `).join('');
+    document.getElementById('deviceModal').classList.add('active');
+}
+
+function chooseModalDevice(id, name) {
+    selectedDevice = { id, name };
+    renderDeviceList();
+    closeModal();
+    if (modalCallback) modalCallback({ id, name });
+}
+
+function closeModal() {
+    document.getElementById('deviceModal').classList.remove('active');
+}
+
+// ========== 上传功能 ==========
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFiles(fileInput.files); });
+
+function handleFiles(files) {
+    // 先选目标设备
+    const chooseTarget = ({ id, name }) => {
+        uploadTarget = { id, name };
+        document.getElementById('uploadTargetName').textContent = name;
+        document.getElementById('uploadTargetBar').classList.add('active');
+
+        // 逐个上传
+        Array.from(files).forEach((file, i) => {
+            setTimeout(() => uploadFile(file, id), i * 200);
+        });
+    };
+    openModal(chooseTarget);
+}
+
+function uploadFile(file, targetId) {
+    const progress = document.getElementById('uploadProgress');
+    const fill = document.getElementById('progressFill');
+    const text = document.getElementById('progressText');
+    progress.classList.add('active');
+
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('target_device', targetId);
+    if (myClientId) formData.append('sender_id', myClientId);
+
+    // 使用 XMLHttpRequest 以获取进度
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            fill.style.width = pct + '%';
+            text.textContent = `${formatSize(e.loaded)} / ${formatSize(e.total)} (${pct}%)`;
+        }
+    });
+
+    xhr.addEventListener('load', () => {
+        progress.classList.remove('active');
+        if (xhr.status === 200) {
+            const res = JSON.parse(xhr.responseText);
+            if (res.ok) {
+                showToast('✅', `文件上传成功: ${file.name}`);
+                loadFiles(); // 刷新文件列表
+            } else {
+                showToast('❌', `上传失败: ${res.error || '未知错误'}`);
+            }
+        } else {
+            showToast('❌', `上传失败 (HTTP ${xhr.status})`);
+        }
+    });
+
+    xhr.addEventListener('error', () => {
+        progress.classList.remove('active');
+        showToast('❌', '上传失败，请检查网络');
+    });
+
+    text.textContent = `${file.name} (${formatSize(file.size)})`;
+    fill.style.width = '0%';
+    xhr.open('POST', '/upload');
+    xhr.send(formData);
+}
+
+// ========== 消息功能 ==========
+function addChatMessage(from, content, time) {
+    const el = document.getElementById('chatMessages');
+    // 清除提示语
+    if (el.querySelector('.no-chat-hint')) el.innerHTML = '';
+
+    const div = document.createElement('div');
+    div.className = 'message';
+    div.innerHTML = `
+        <div class="message-avatar" style="background:${getAvatarColor(from)}">${from.charAt(0).toUpperCase()}</div>
+        <div class="message-bubble">
+            <div class="message-sender">${escHtml(from)}</div>
+            ${escHtml(content)}
+            <div class="message-time">${time || ''}</div>
+        </div>
+    `;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+}
+
+function sendMessage() {
+    const input = document.getElementById('chatInput');
+    const content = input.value.trim();
+    if (!content) return;
+
+    ws.send(JSON.stringify({ type: 'message', content }));
+    // 本地回显
+    addChatMessage(myName, content, new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
+    input.value = '';
+}
+
+document.getElementById('chatInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') sendMessage();
+});
+
+function clearUploadTarget() {
+    uploadTarget = null;
+    document.getElementById('uploadTargetBar').classList.remove('active');
+}
+
+function clearChatTarget() {
+    chatTarget = null;
+    selectedDevice = null;
+    renderDeviceList();
+    // 禁用聊天输入框和发送按钮
+    document.getElementById('chatInput').disabled = true;
+    document.getElementById('sendBtn').disabled = true;
+    document.getElementById('chatInput').value = '';
+}
+
+// ========== 文件管理 ==========
+function loadFiles() {
+    fetch('/files' + (myClientId ? `?client_id=${encodeURIComponent(myClientId)}` : ''))
+        .then(r => r.json())
+        .then(data => {
+            const el = document.getElementById('fileList');
+            if (data.files.length === 0) {
+                el.innerHTML = '<div class="empty-files">还没有文件</div>';
+                return;
+            }
+            el.innerHTML = data.files.map(f => `
+                <div class="file-item">
+                    <span class="file-icon">${getFileIcon(f.name)}</span>
+                    <div class="file-info">
+                        <div class="file-name" title="${escHtml(f.name)}">${escHtml(f.name)}</div>
+                        <div class="file-meta">
+                            <span>${formatSize(f.size)}</span>
+                            <span>📅 ${f.time}</span>
+                            <span>⏰ 过期: ${f.expires_at}</span>
+                            ${f.role === 'sent' ? '<span style="color:#667eea">📤 你发送的</span>' : ''}
+                            ${f.role === 'received' ? '<span style="color:#43e97b">📥 你接收的</span>' : ''}
+                        </div>
+                    </div>
+                    <div class="file-actions">
+                        <a class="btn-download" href="/download/${encodeURIComponent(f.name)}" title="下载">⬇️</a>
+                        <button class="btn-delete" onclick="deleteFile('${escHtml(f.name)}')" title="删除">🗑️</button>
+                    </div>
+                </div>
+            `).join('');
+        })
+        .catch(() => { el.innerHTML = '<div class="empty-files">加载失败</div>'; });
+}
+
+function deleteFile(filename) {
+    if (!confirm(`确定删除文件 "${filename}"？`)) return;
+    fetch(`/delete/${encodeURIComponent(filename)}${myClientId ? '?client_id=' + encodeURIComponent(myClientId) : ''}`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) showToast('🗑️', '文件已删除');
+            else showToast('❌', data.error || '删除失败');
+            loadFiles();
+        });
+}
+
+// ========== Tab 切换 ==========
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+
+        // 切换到文件管理时刷新列表
+        if (btn.dataset.tab === 'files') loadFiles();
+    });
+});
+
+// ========== 折叠面板 ==========
+function toggleSection(header) {
+    header.classList.toggle('collapsed');
+    const body = header.nextElementSibling;
+    body.classList.toggle('hidden');
+}
+
+// ========== Toast 通知 ==========
+function showToast(icon, text) {
+    const container = document.getElementById('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.innerHTML = `<span style="font-size:18px">${icon}</span><span>${text}</span>`;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.classList.add('hiding');
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+// ========== 工具函数 ==========
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+}
+
+function getFileIcon(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    const icons = {
+        jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️', svg: '🖼️', webp: '🖼️', bmp: '🖼️',
+        mp4: '🎬', avi: '🎬', mov: '🎬', mkv: '🎬', wmv: '🎬', flv: '🎬',
+        mp3: '🎵', wav: '🎵', flac: '🎵', aac: '🎵', ogg: '🎵',
+        pdf: '📄', doc: '📝', docx: '📝', xls: '📊', xlsx: '📊', ppt: '📑', pptx: '📑', txt: '📝',
+        zip: '📦', rar: '📦', '7z': '📦', tar: '📦', gz: '📦',
+        exe: '⚙️', dmg: '💿', apk: '📱', iso: '💿',
+    };
+    return icons[ext] || '📄';
+}
+
+function escHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// ========== 初始化 ==========
+connectWS();
+loadFiles();
+setInterval(loadFiles, 15000); // 每15秒刷新文件列表
+</script>
+</body>
+</html>
