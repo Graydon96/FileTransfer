@@ -23,14 +23,52 @@ import uvicorn
 # ========== 配置 ==========
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 FILE_RETENTION_DAYS = 3          # 文件保留天数
-MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB
+FILE_RETENTION_DAYS = int(os.getenv("FILE_RETENTION_DAYS", str(FILE_RETENTION_DAYS)))
 HOST = "0.0.0.0"                # 监听所有网卡（局域网可访问）
 PORT = 8080
 
 
+def _parse_size(value: str | None, default: int) -> int:
+    """解析大小配置，支持 500MB、2GB 或纯字节数。"""
+    if not value:
+        return default
+
+    text = value.strip().upper().replace(" ", "")
+    units = {
+        "KB": 1024,
+        "K": 1024,
+        "MB": 1024 ** 2,
+        "M": 1024 ** 2,
+        "GB": 1024 ** 3,
+        "G": 1024 ** 3,
+    }
+    for suffix, multiplier in units.items():
+        if text.endswith(suffix):
+            return int(float(text[:-len(suffix)]) * multiplier)
+    return int(float(text))
+
+
+def _format_size(size: int) -> str:
+    """格式化大小用于日志、错误消息和前端展示。"""
+    if size >= 1024 ** 3:
+        value = size / (1024 ** 3)
+        return f"{value:g} GB"
+    if size >= 1024 ** 2:
+        value = size / (1024 ** 2)
+        return f"{value:g} MB"
+    if size >= 1024:
+        value = size / 1024
+        return f"{value:g} KB"
+    return f"{size} B"
+
+
+MAX_FILE_SIZE = _parse_size(os.getenv("MAX_FILE_SIZE"), 2 * 1024 * 1024 * 1024)
+MAX_FILE_SIZE_LABEL = _format_size(MAX_FILE_SIZE)
+
+
 # ========== 全局状态 ==========
 connected_clients: dict[str, WebSocket] = {}   # client_id -> websocket
-client_info: dict[str, dict] = {}              # client_id -> {name, ip, connect_time}
+client_info: dict[str, dict] = {}              # client_id -> {name, alias, browser, ip, connect_time}
 
 # 文件元数据存储：filename -> {target_client_id, target_name, sender_client_id, sender_name, created_at}
 file_metadata: dict[str, dict] = {}
@@ -114,7 +152,13 @@ def cleanup_old_files():
 async def _broadcast_device_list():
     """向所有在线设备广播当前设备列表"""
     devices = [
-        {"id": cid, "name": info["name"], "ip": info["ip"]}
+        {
+            "id": cid,
+            "name": info["name"],
+            "alias": info.get("alias", info["name"]),
+            "browser": info.get("browser", "未知浏览器"),
+            "ip": info["ip"],
+        }
         for cid, info in client_info.items()
     ]
     payload = {"type": "device_list", "devices": devices}
@@ -142,6 +186,61 @@ def _get_unique_device_name(base: str) -> str:
     return name
 
 
+DEVICE_ADJECTIVES = [
+    "明快", "安静", "灵巧", "温柔", "勇敢", "清爽", "闪亮", "可靠",
+    "轻盈", "敏捷", "快乐", "沉稳", "聪明", "暖心", "从容", "鲜活",
+]
+
+DEVICE_FRUITS = [
+    "苹果", "香蕉", "橙子", "梨子", "桃子", "芒果", "葡萄", "草莓",
+    "柚子", "樱桃", "西瓜", "菠萝", "荔枝", "蓝莓", "柠檬", "石榴",
+]
+
+
+def _detect_browser(user_agent: str) -> str:
+    """从 User-Agent 粗略识别浏览器类型。"""
+    ua = (user_agent or "").lower()
+    if "edg/" in ua:
+        return "Edge"
+    if "opr/" in ua or "opera" in ua:
+        return "Opera"
+    if "firefox/" in ua:
+        return "Firefox"
+    if "samsungbrowser/" in ua:
+        return "Samsung Internet"
+    if "chrome/" in ua or "crios/" in ua:
+        return "Chrome"
+    if "safari/" in ua:
+        return "Safari"
+    return "未知浏览器"
+
+
+def _clean_label(value: str, fallback: str, max_length: int = 40) -> str:
+    """清理客户端上报的短标签，避免超长或控制字符进入设备名。"""
+    text = "".join(ch for ch in (value or "").strip() if ch.isprintable())
+    return (text or fallback)[:max_length]
+
+
+def _generate_device_alias(client_id: str) -> str:
+    """生成“形容词 + 水果”的设备别名。"""
+    seed = int(client_id, 16)
+    adjective = DEVICE_ADJECTIVES[seed % len(DEVICE_ADJECTIVES)]
+    fruit = DEVICE_FRUITS[(seed // len(DEVICE_ADJECTIVES)) % len(DEVICE_FRUITS)]
+    return _get_unique_device_name(f"{adjective}{fruit}")
+
+
+def _build_device_name(alias: str, browser: str, ip: str) -> str:
+    """拼出列表中展示的完整设备名。"""
+    return f"{alias} · {browser} · {ip}"
+
+
+def _safe_filename_label(value: str) -> str:
+    """将设备显示名转换为可用于文件名前缀的文本。"""
+    invalid_chars = '<>:"/\\|?*'
+    safe = "".join("_" if ch in invalid_chars or ord(ch) < 32 else ch for ch in value)
+    return safe.strip(" .")[:120] or "未知设备"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动时创建目录、加载元数据并定期清理"""
@@ -167,7 +266,7 @@ app = FastAPI(title="文件传输工具", lifespan=lifespan)
 async def index(request: Request):
     """返回前端页面"""
     with open(os.path.join(os.path.dirname(__file__), "templates/index.html"), "r", encoding="utf-8") as f:
-        return f.read()
+        return f.read().replace("__MAX_FILE_SIZE_LABEL__", MAX_FILE_SIZE_LABEL)
 
 
 # ========== WebSocket - 设备连接与消息 ==========
@@ -177,21 +276,25 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
 
     client_id = str(uuid.uuid4())[:8]
-    raw_name = ""
+    client_ip = str(websocket.client.host) if websocket.client else "unknown"
+    browser = "未知浏览器"
     try:
         data = await asyncio.wait_for(websocket.receive_text(), timeout=10)
         parsed = json.loads(data)
-        raw_name = parsed.get("name", "未知设备")
+        user_agent = parsed.get("user_agent") or websocket.headers.get("user-agent", "")
+        browser = _clean_label(parsed.get("browser", "") or _detect_browser(user_agent), "未知浏览器")
     except Exception:
-        pass
+        browser = _detect_browser(websocket.headers.get("user-agent", ""))
 
-    base_name = (raw_name or "未知设备").strip()[:20]
-    device_name = _get_unique_device_name(base_name)
+    device_alias = _generate_device_alias(client_id)
+    device_name = _build_device_name(device_alias, browser, client_ip)
 
     connected_clients[client_id] = websocket
     client_info[client_id] = {
         "name": device_name,
-        "ip": str(websocket.client.host) if websocket.client else "unknown",
+        "alias": device_alias,
+        "browser": browser,
+        "ip": client_ip,
         "connect_time": datetime.now().isoformat(),
     }
 
@@ -255,7 +358,7 @@ async def upload_file(
     file.file.seek(0)
 
     if size > MAX_FILE_SIZE:
-        return {"error": f"文件过大，最大支持 {MAX_FILE_SIZE // (1024*1024*1024)}GB"}
+        return {"error": f"文件过大，最大支持 {MAX_FILE_SIZE_LABEL}"}
 
     now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
     original_name = file.filename or "unknown"
@@ -265,8 +368,9 @@ async def upload_file(
     sender_cid = sender_id.strip() or _get_client_id_by_ip(sender_ip) or ""
     sender_label = client_info.get(sender_cid, {}).get("name", "") if sender_cid else "未知设备"
     target_label = client_info.get(device_id, {}).get("name", device_id) if device_id else "未知设备"
+    safe_target_label = _safe_filename_label(target_label)
 
-    filename = f"{target_label}_{now_str}_{safe_original}"
+    filename = f"{safe_target_label}_{now_str}_{safe_original}"
     filepath = UPLOAD_DIR / filename
 
     if filepath.exists():
@@ -406,7 +510,7 @@ if __name__ == "__main__":
     print(f"  [LAN]     http://{local_ip}:{PORT}")
     print(f"\n  [Storage] {UPLOAD_DIR.absolute()}")
     print(f"  [TTL]     {FILE_RETENTION_DAYS} days")
-    print(f"  [MaxSize] {MAX_FILE_SIZE // (1024*1024*1024)} GB")
+    print(f"  [MaxSize] {MAX_FILE_SIZE_LABEL}")
 
     if local_ip != "127.0.0.1":
         print(f"\n  [Public IP]")
