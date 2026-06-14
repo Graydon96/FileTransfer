@@ -1,5 +1,5 @@
 # FileTransfer
-Transfer files between different devices
+Transfer files between different devices without login
 
 ## Docker configuration
 
