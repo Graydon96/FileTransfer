@@ -66,6 +66,7 @@ def _format_size(size: int) -> str:
 
 MAX_FILE_SIZE = _parse_size(os.getenv("MAX_FILE_SIZE"), 2 * 1024 * 1024 * 1024)
 MAX_FILE_SIZE_LABEL = _format_size(MAX_FILE_SIZE)
+FILE_RETENTION_DAYS_LABEL = f"{FILE_RETENTION_DAYS}天"
 
 
 # ========== 全局状态 ==========
@@ -325,7 +326,11 @@ app = FastAPI(title="文件传输工具", lifespan=lifespan)
 async def index(request: Request):
     """返回前端页面"""
     with open(os.path.join(os.path.dirname(__file__), "templates/index.html"), "r", encoding="utf-8") as f:
-        return f.read().replace("__MAX_FILE_SIZE_LABEL__", MAX_FILE_SIZE_LABEL)
+        return (
+            f.read()
+            .replace("__MAX_FILE_SIZE_LABEL__", MAX_FILE_SIZE_LABEL)
+            .replace("__FILE_RETENTION_DAYS_LABEL__", FILE_RETENTION_DAYS_LABEL)
+        )
 
 
 # ========== WebSocket - 设备连接与消息 ==========
