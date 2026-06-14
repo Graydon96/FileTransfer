@@ -230,13 +230,15 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-s
 
 <!-- ====== 通知气泡 ====== -->
 <div class="toast-container" id="toastContainer"></div>
+<iframe id="downloadFrame" name="downloadFrame" style="display:none"></iframe>
 
 <script>
 // ========== 全局状态 ==========
 let ws = null;
-let myClientId = '';         // WebSocket client_id（用于 API 权限校验）
+let myClientId = '';         // WebSocket client_id（仅表示当前连接）
+let myDeviceId = getOrCreateDeviceId(); // 稳定设备 ID（用于刷新/重连后的权限校验）
 let myName = '未知设备';
-let devices = [];       // 在线设备列表 [{id, name, ip}]
+let devices = [];       // 在线设备列表 [{id, device_id, name, ip}]
 let selectedDevice = null;   // {id, name}
 let uploadTarget = null;
 let chatTarget = null;
@@ -251,6 +253,15 @@ function getAvatarColor(name) {
 
 function getDeviceTitle(device) {
     return device.alias || device.name || '未知设备';
+}
+
+function isCurrentDevice(device) {
+    return (myDeviceId && device.device_id === myDeviceId) || (myClientId && device.id === myClientId);
+}
+
+function getDisplayDeviceTitle(device) {
+    const title = getDeviceTitle(device);
+    return isCurrentDevice(device) ? `${title}（此设备）` : title;
 }
 
 function getDeviceMeta(device) {
@@ -268,6 +279,24 @@ function detectBrowser() {
     return '未知浏览器';
 }
 
+function getOrCreateDeviceId() {
+    const key = 'filetransfer_device_id';
+    let id = localStorage.getItem(key);
+    if (!id) {
+        id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        localStorage.setItem(key, id);
+    }
+    return id;
+}
+
+function appendIdentity(url) {
+    const params = new URLSearchParams();
+    if (myDeviceId) params.set('device_id', myDeviceId);
+    if (myClientId) params.set('client_id', myClientId);
+    const separator = url.includes('?') ? '&' : '?';
+    return params.toString() ? `${url}${separator}${params}` : url;
+}
+
 // ========== WebSocket 连接 ==========
 function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -279,6 +308,7 @@ function connectWS() {
         // 发送浏览器信息，设备名由服务端自动生成
         ws.send(JSON.stringify({
             type: 'register',
+            device_id: myDeviceId,
             browser: detectBrowser(),
             user_agent: navigator.userAgent,
         }));
@@ -290,6 +320,7 @@ function connectWS() {
         switch (msg.type) {
             case 'registered':
                 myClientId = msg.client_id;
+                myDeviceId = msg.device_id || myDeviceId;
                 myName = msg.my_name || myName;
                 showToast('🔑', `已注册为：${myName}`);
                 break;
@@ -298,8 +329,10 @@ function connectWS() {
                 renderDeviceList();
                 break;
             case 'message':
-                // 只接收发给选中设备或群发的消息（所有在线设备可见）
                 addChatMessage(msg.from_name, msg.content, msg.timestamp);
+                break;
+            case 'error':
+                showToast('⚠️', msg.message || '发送失败');
                 break;
             case 'new_file':
                 if (msg.to_name) {
@@ -342,7 +375,7 @@ function renderDeviceList() {
         <div class="device-item ${selectedDevice?.id === d.id ? 'selected' : ''}" onclick="selectDevice('${d.id}', '${escHtml(d.name)}')">
             <div class="device-avatar" style="background:${getAvatarColor(d.name)}">${getDeviceTitle(d).charAt(0).toUpperCase()}</div>
             <div class="device-info">
-                <div class="device-name" title="${escHtml(d.name)}">${escHtml(getDeviceTitle(d))}</div>
+                <div class="device-name" title="${escHtml(getDisplayDeviceTitle(d))}">${escHtml(getDisplayDeviceTitle(d))}</div>
                 <div class="device-ip">${escHtml(getDeviceMeta(d))}</div>
             </div>
         </div>
@@ -374,7 +407,7 @@ function openModal(callback) {
         <div class="modal-device-item" onclick="chooseModalDevice('${d.id}', '${escHtml(d.name)}')">
             <div class="device-avatar" style="background:${getAvatarColor(d.name)};width:32px;height:32px;font-size:14px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:white;">${getDeviceTitle(d).charAt(0).toUpperCase()}</div>
             <div class="device-info">
-                <div class="device-name" title="${escHtml(d.name)}">${escHtml(getDeviceTitle(d))}</div>
+                <div class="device-name" title="${escHtml(getDisplayDeviceTitle(d))}">${escHtml(getDisplayDeviceTitle(d))}</div>
                 <div class="device-ip">${escHtml(getDeviceMeta(d))}</div>
             </div>
         </div>
@@ -432,6 +465,7 @@ function uploadFile(file, targetId) {
     formData.append('file', file);
     formData.append('target_device', targetId);
     if (myClientId) formData.append('sender_id', myClientId);
+    if (myDeviceId) formData.append('sender_device_id', myDeviceId);
 
     // 使用 XMLHttpRequest 以获取进度
     const xhr = new XMLHttpRequest();
@@ -493,11 +527,9 @@ function addChatMessage(from, content, time) {
 function sendMessage() {
     const input = document.getElementById('chatInput');
     const content = input.value.trim();
-    if (!content) return;
+    if (!content || !selectedDevice || !ws) return;
 
-    ws.send(JSON.stringify({ type: 'message', content }));
-    // 本地回显
-    addChatMessage(myName, content, new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }));
+    ws.send(JSON.stringify({ type: 'message', content, target_device: selectedDevice.id }));
     input.value = '';
 }
 
@@ -522,7 +554,7 @@ function clearChatTarget() {
 
 // ========== 文件管理 ==========
 function loadFiles() {
-    fetch('/files' + (myClientId ? `?client_id=${encodeURIComponent(myClientId)}` : ''))
+    fetch(appendIdentity('/files'))
         .then(r => r.json())
         .then(data => {
             const el = document.getElementById('fileList');
@@ -544,7 +576,7 @@ function loadFiles() {
                         </div>
                     </div>
                     <div class="file-actions">
-                        <a class="btn-download" href="/download/${encodeURIComponent(f.name)}" title="下载">⬇️</a>
+                        <a class="btn-download" href="${appendIdentity('/download/' + encodeURIComponent(f.name))}" target="downloadFrame" title="下载">⬇️</a>
                         <button class="btn-delete" onclick="deleteFile('${escHtml(f.name)}')" title="删除">🗑️</button>
                     </div>
                 </div>
@@ -555,7 +587,7 @@ function loadFiles() {
 
 function deleteFile(filename) {
     if (!confirm(`确定删除文件 "${filename}"？`)) return;
-    fetch(`/delete/${encodeURIComponent(filename)}${myClientId ? '?client_id=' + encodeURIComponent(myClientId) : ''}`, { method: 'POST' })
+    fetch(appendIdentity(`/delete/${encodeURIComponent(filename)}`), { method: 'POST' })
         .then(r => r.json())
         .then(data => {
             if (data.ok) showToast('🗑️', '文件已删除');

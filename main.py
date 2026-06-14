@@ -5,8 +5,10 @@
 """
 
 import asyncio
+import hashlib
 import json
 import os
+import re
 import shutil
 import socket
 import time
@@ -68,10 +70,41 @@ MAX_FILE_SIZE_LABEL = _format_size(MAX_FILE_SIZE)
 
 # ========== 全局状态 ==========
 connected_clients: dict[str, WebSocket] = {}   # client_id -> websocket
-client_info: dict[str, dict] = {}              # client_id -> {name, alias, browser, ip, connect_time}
+client_info: dict[str, dict] = {}              # client_id -> {device_id, name, alias, browser, ip, connect_time}
 
-# 文件元数据存储：filename -> {target_client_id, target_name, sender_client_id, sender_name, created_at}
+# 文件元数据存储：filename -> {target_device_id, target_name, sender_device_id, sender_name, created_at}
 file_metadata: dict[str, dict] = {}
+
+
+def _metadata_filename_to_upload_name(meta_path: Path) -> str:
+    """Return the upload filename represented by a metadata JSON file."""
+    suffix = ".json"
+    if meta_path.name.endswith(suffix):
+        return meta_path.name[:-len(suffix)]
+    return meta_path.stem
+
+
+def _resolve_upload_file(filename: str) -> Path:
+    """Resolve a user-supplied upload filename without leaving UPLOAD_DIR."""
+    if not filename or Path(filename).name != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    upload_root = UPLOAD_DIR.resolve()
+    filepath = (UPLOAD_DIR / filename).resolve()
+    try:
+        filepath.relative_to(upload_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    if filepath.parent != upload_root:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    return filepath
+
+
+def _download_filename(stored_name: str) -> str:
+    """Strip the target/timestamp prefix from stored upload names."""
+    match = re.match(r"^.+_\d{8}_\d{6}_(.+)$", stored_name)
+    return match.group(1) if match else stored_name
 
 
 def _load_file_metadata():
@@ -81,7 +114,7 @@ def _load_file_metadata():
         return
     for f in meta_dir.iterdir():
         if f.suffix == ".json":
-            filename = f.stem  # 原始文件名（可能含uuid后缀）
+            filename = _metadata_filename_to_upload_name(f)
             try:
                 with open(f, "r", encoding="utf-8") as mf:
                     file_metadata[filename] = json.load(mf)
@@ -118,14 +151,28 @@ def _get_client_id_by_ip(ip: str) -> str | None:
     return None
 
 
-def _is_authorized(client_id: str, filename: str) -> bool:
+def _get_client_info_by_device_id(device_id: str) -> dict | None:
+    """通过稳定 device_id 查找当前在线设备信息"""
+    for info in client_info.values():
+        if info.get("device_id") == device_id:
+            return info
+    return None
+
+
+def _is_authorized(device_id: str, filename: str, client_id: str = "") -> bool:
     """检查某客户端是否有权限访问指定文件（发送方或接收方均可）"""
     meta = file_metadata.get(filename)
     if meta is None:
         # 没有元数据的旧文件，默认允许访问（兼容已有数据）
         return True
-    return (meta.get("sender_client_id") == client_id or
-            meta.get("target_client_id") == client_id)
+
+    if device_id and (meta.get("sender_device_id") == device_id or
+                      meta.get("target_device_id") == device_id):
+        return True
+
+    # 兼容旧元数据：旧版本只记录临时 client_id。
+    return bool(client_id and (meta.get("sender_client_id") == client_id or
+                               meta.get("target_client_id") == client_id))
 
 
 def _extract_sender_ip(request: Request) -> str:
@@ -154,6 +201,7 @@ async def _broadcast_device_list():
     devices = [
         {
             "id": cid,
+            "device_id": info.get("device_id", cid),
             "name": info["name"],
             "alias": info.get("alias", info["name"]),
             "browser": info.get("browser", "未知浏览器"),
@@ -175,9 +223,13 @@ async def _broadcast_to_all(payload: dict):
             pass
 
 
-def _get_unique_device_name(base: str) -> str:
+def _get_unique_device_name(base: str, device_id: str = "") -> str:
     """确保同一网络下设备名唯一，自动加序号"""
-    used = set(info["name"] for info in client_info.values())
+    used = {
+        info.get("alias", info["name"])
+        for info in client_info.values()
+        if info.get("device_id") != device_id
+    }
     name = base
     counter = 1
     while name in used and len(connected_clients) > 0:
@@ -221,12 +273,19 @@ def _clean_label(value: str, fallback: str, max_length: int = 40) -> str:
     return (text or fallback)[:max_length]
 
 
-def _generate_device_alias(client_id: str) -> str:
+def _generate_device_alias(device_id: str) -> str:
     """生成“形容词 + 水果”的设备别名。"""
-    seed = int(client_id, 16)
+    digest = hashlib.sha256(device_id.encode("utf-8")).hexdigest()
+    seed = int(digest[:12], 16)
     adjective = DEVICE_ADJECTIVES[seed % len(DEVICE_ADJECTIVES)]
     fruit = DEVICE_FRUITS[(seed // len(DEVICE_ADJECTIVES)) % len(DEVICE_FRUITS)]
-    return _get_unique_device_name(f"{adjective}{fruit}")
+    return _get_unique_device_name(f"{adjective}的{fruit}", device_id)
+
+
+def _normalize_device_id(value: str) -> str:
+    """清理并限制客户端持久化的 device_id。"""
+    text = "".join(ch for ch in (value or "").strip() if ch.isalnum() or ch in "-_")
+    return text[:80] or uuid.uuid4().hex
 
 
 def _build_device_name(alias: str, browser: str, ip: str) -> str:
@@ -277,20 +336,24 @@ async def websocket_endpoint(websocket: WebSocket):
 
     client_id = str(uuid.uuid4())[:8]
     client_ip = str(websocket.client.host) if websocket.client else "unknown"
+    device_id = ""
     browser = "未知浏览器"
     try:
         data = await asyncio.wait_for(websocket.receive_text(), timeout=10)
         parsed = json.loads(data)
+        device_id = _normalize_device_id(parsed.get("device_id", ""))
         user_agent = parsed.get("user_agent") or websocket.headers.get("user-agent", "")
         browser = _clean_label(parsed.get("browser", "") or _detect_browser(user_agent), "未知浏览器")
     except Exception:
+        device_id = uuid.uuid4().hex
         browser = _detect_browser(websocket.headers.get("user-agent", ""))
 
-    device_alias = _generate_device_alias(client_id)
+    device_alias = _generate_device_alias(device_id)
     device_name = _build_device_name(device_alias, browser, client_ip)
 
     connected_clients[client_id] = websocket
     client_info[client_id] = {
+        "device_id": device_id,
         "name": device_name,
         "alias": device_alias,
         "browser": browser,
@@ -304,6 +367,7 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.send_text(json.dumps({
         "type": "registered",
         "client_id": client_id,
+        "device_id": device_id,
         "my_name": device_name,
     }))
 
@@ -319,13 +383,26 @@ async def websocket_endpoint(websocket: WebSocket):
                 msg_type = msg.get("type", "")
 
                 if msg_type == "message":
+                    target_client_id = (msg.get("target_device") or "").strip()
+                    target_ws = connected_clients.get(target_client_id)
+                    if not target_ws:
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "message": "目标设备不在线，消息未发送",
+                        }, ensure_ascii=False))
+                        continue
+
                     payload = {
                         "type": "message",
                         "from_name": client_info[client_id]["name"],
+                        "to_name": client_info.get(target_client_id, {}).get("name", ""),
                         "content": msg.get("content", ""),
                         "timestamp": datetime.now().strftime("%H:%M"),
                     }
-                    await _broadcast_to_all(payload)
+                    message_text = json.dumps(payload, ensure_ascii=False)
+                    await target_ws.send_text(message_text)
+                    if target_client_id != client_id:
+                        await websocket.send_text(message_text)
 
                 elif msg_type == "ping":
                     await websocket.send_text(json.dumps({"type": "pong"}))
@@ -348,7 +425,8 @@ async def upload_file(
     request: Request,
     file: UploadFile = FastAPIFile(...),
     target_device: str = Form(None),
-    sender_id: str = Form(""),          # 前端传入发送方的 WebSocket client_id
+    sender_id: str = Form(""),          # 兼容旧前端：发送方的 WebSocket client_id
+    sender_device_id: str = Form(""),   # 稳定设备 ID，用于刷新/重连后的权限校验
 ):
     """上传文件"""
     sender_ip = _extract_sender_ip(request)
@@ -364,10 +442,14 @@ async def upload_file(
     original_name = file.filename or "unknown"
     safe_original = "".join(c if c.isalnum() or c in "._- " else "_" for c in original_name)[:100]
 
-    device_id = target_device or "未知设备"
+    target_client_id = target_device or ""
     sender_cid = sender_id.strip() or _get_client_id_by_ip(sender_ip) or ""
-    sender_label = client_info.get(sender_cid, {}).get("name", "") if sender_cid else "未知设备"
-    target_label = client_info.get(device_id, {}).get("name", device_id) if device_id else "未知设备"
+    sender_stable_id = _normalize_device_id(sender_device_id) if sender_device_id.strip() else ""
+    sender_info = (_get_client_info_by_device_id(sender_stable_id) if sender_stable_id else None) or client_info.get(sender_cid, {})
+    target_info = client_info.get(target_client_id, {})
+    target_stable_id = target_info.get("device_id", "")
+    sender_label = sender_info.get("name", "未知设备")
+    target_label = target_info.get("name", target_client_id or "未知设备")
     safe_target_label = _safe_filename_label(target_label)
 
     filename = f"{safe_target_label}_{now_str}_{safe_original}"
@@ -385,10 +467,11 @@ async def upload_file(
         return {"error": f"保存失败: {str(e)}"}
 
     # ── 记录文件元数据（权限控制） ──
-    target_cid = device_id if client_info.get(device_id) else ""
     file_metadata[filename] = {
-        "target_client_id": target_cid,
+        "target_device_id": target_stable_id,
+        "target_client_id": target_client_id if target_info else "",
         "target_name": target_label,
+        "sender_device_id": sender_stable_id or sender_info.get("device_id", ""),
         "sender_client_id": sender_cid,
         "sender_name": sender_label,
         "created_at": datetime.now().isoformat(),
@@ -408,10 +491,11 @@ async def upload_file(
 
 
 @app.get("/files")
-async def list_files(request: Request, client_id: str = ""):
+async def list_files(request: Request, device_id: str = "", client_id: str = ""):
     """列出当前用户有权访问的文件（发送方或接收方的文件）"""
     sender_ip = _extract_sender_ip(request)
     cid = client_id.strip() or _get_client_id_by_ip(sender_ip) or ""
+    stable_id = _normalize_device_id(device_id) if device_id.strip() else ""
 
     now = time.time()
     max_age = FILE_RETENTION_DAYS * 86400
@@ -424,51 +508,54 @@ async def list_files(request: Request, client_id: str = ""):
         if age > max_age:
             continue
         # ── 权限过滤：只显示该用户有权访问的文件 ──
-        if cid and not _is_authorized(cid, f.name):
+        if (stable_id or cid) and not _is_authorized(stable_id, f.name, cid):
             continue
 
         size_bytes = f.stat().st_size
         meta = file_metadata.get(f.name, {})
+        is_sent = (stable_id and meta.get("sender_device_id") == stable_id) or (cid and meta.get("sender_client_id") == cid)
+        is_received = (stable_id and meta.get("target_device_id") == stable_id) or (cid and meta.get("target_client_id") == cid)
         files.append({
             "name": f.name,
             "size": size_bytes,
             "time": datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
             "expires_at": (datetime.fromtimestamp(f.stat().st_mtime) + timedelta(days=FILE_RETENTION_DAYS)).strftime("%Y-%m-%d %H:%M"),
-            "role": "sent" if meta.get("sender_client_id") == cid else ("received" if meta.get("target_client_id") == cid else None),
+            "role": "sent" if is_sent else ("received" if is_received else None),
         })
 
     return {"files": files}
 
 
 @app.get("/download/{filename:path}")
-async def download_file(request: Request, filename: str):
+async def download_file(request: Request, filename: str, device_id: str = "", client_id: str = ""):
     """下载文件（仅发送方或接收方可访问）"""
     sender_ip = _extract_sender_ip(request)
-    cid = _get_client_id_by_ip(sender_ip) or ""
+    cid = client_id.strip() or _get_client_id_by_ip(sender_ip) or ""
+    stable_id = _normalize_device_id(device_id) if device_id.strip() else ""
 
     # ── 权限检查 ──
-    if not _is_authorized(cid, filename):
+    if not _is_authorized(stable_id, filename, cid):
         raise HTTPException(status_code=403, detail="无权访问此文件（仅发送方和接收方可下载）")
 
-    filepath = UPLOAD_DIR / filename
+    filepath = _resolve_upload_file(filename)
     if not filepath.exists():
         return {"error": "文件不存在"}
-    parts = filename.split("_", 2)
-    original = parts[2] if len(parts) >= 3 else filename
+    original = _download_filename(filename)
     return FileResponse(filepath, filename=original, media_type="application/octet-stream")
 
 
 @app.post("/delete/{filename:path}")
-async def delete_file(request: Request, filename: str, client_id: str = ""):
+async def delete_file(request: Request, filename: str, device_id: str = "", client_id: str = ""):
     """删除文件（仅发送方或接收方可操作）"""
     sender_ip = _extract_sender_ip(request)
     cid = client_id.strip() or _get_client_id_by_ip(sender_ip) or ""
+    stable_id = _normalize_device_id(device_id) if device_id.strip() else ""
 
     # ── 权限检查 ──
-    if not _is_authorized(cid, filename):
+    if not _is_authorized(stable_id, filename, cid):
         raise HTTPException(status_code=403, detail="无权删除此文件")
 
-    filepath = UPLOAD_DIR / filename
+    filepath = _resolve_upload_file(filename)
     if not filepath.exists():
         return {"error": "文件不存在"}
     try:
