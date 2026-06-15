@@ -1,0 +1,1 @@
+docker build -t graydon96/filetransfer:latest .

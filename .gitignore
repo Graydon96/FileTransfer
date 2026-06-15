@@ -48,3 +48,7 @@ logs/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# agent files
+agent.md
+.bat
