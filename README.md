@@ -1,5 +1,10 @@
 # FileTransfer
-Transfer files between different devices without login
+Transfer files between different devices without login via different network
+
+## For normal use
+```bash
+python main.py
+```
 
 ## Docker configuration
 
