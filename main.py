@@ -24,6 +24,7 @@ import uvicorn
 
 # ========== 配置 ==========
 UPLOAD_DIR = Path(__file__).parent / "uploads"
+DEVICE_NAMES_FILE = Path(__file__).parent / "device_names.json"
 FILE_RETENTION_DAYS = 3          # 文件保留天数
 FILE_RETENTION_DAYS = int(os.getenv("FILE_RETENTION_DAYS", str(FILE_RETENTION_DAYS)))
 HOST = "0.0.0.0"                # 监听所有网卡（局域网可访问）
@@ -75,6 +76,7 @@ client_info: dict[str, dict] = {}              # client_id -> {device_id, name, 
 
 # 文件元数据存储：filename -> {target_device_id, target_name, sender_device_id, sender_name, created_at}
 file_metadata: dict[str, dict] = {}
+device_names: dict[str, str] = {}
 
 
 def _metadata_filename_to_upload_name(meta_path: Path) -> str:
@@ -142,6 +144,55 @@ def _delete_file_metadata(filename: str):
         except Exception:
             pass
     file_metadata.pop(filename, None)
+
+
+def _load_device_names():
+    """从 JSON 文件加载自定义设备名。"""
+    if not DEVICE_NAMES_FILE.exists():
+        return
+    try:
+        with open(DEVICE_NAMES_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return
+
+    if not isinstance(data, dict):
+        return
+
+    for raw_id, raw_name in data.items():
+        device_id = _normalize_device_id(str(raw_id))
+        name = _clean_device_alias(str(raw_name))
+        if device_id and name:
+            device_names[device_id] = name
+
+
+def _save_device_names():
+    """将自定义设备名保存到 JSON 文件。"""
+    with open(DEVICE_NAMES_FILE, "w", encoding="utf-8") as f:
+        json.dump(device_names, f, ensure_ascii=False, indent=2)
+
+
+def _clean_device_alias(value: str) -> str:
+    """清理用户自定义设备名。"""
+    text = " ".join("".join(ch for ch in (value or "").strip() if ch.isprintable()).split())
+    return text[:30]
+
+
+def _get_device_alias(device_id: str) -> str:
+    """优先使用自定义设备名，否则使用自动生成别名。"""
+    custom_name = device_names.get(device_id)
+    if custom_name:
+        return _get_unique_device_name(custom_name, device_id)
+    return _generate_device_alias(device_id)
+
+
+def _refresh_online_device_name(device_id: str):
+    """刷新当前在线设备中同一稳定 device_id 的展示名。"""
+    for info in client_info.values():
+        if info.get("device_id") == device_id:
+            alias = _get_device_alias(device_id)
+            info["alias"] = alias
+            info["name"] = _build_device_name(alias, info.get("browser", "未知浏览器"), info.get("ip", "unknown"))
 
 
 def _get_client_id_by_ip(ip: str) -> str | None:
@@ -305,6 +356,7 @@ def _safe_filename_label(value: str) -> str:
 async def lifespan(app: FastAPI):
     """启动时创建目录、加载元数据并定期清理"""
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    _load_device_names()
     _load_file_metadata()  # 恢复持久化的文件元数据
     cleanup_old_files()
 
@@ -333,6 +385,34 @@ async def index(request: Request):
         )
 
 
+@app.post("/device-name")
+async def set_device_name(request: Request, device_id: str = Form(""), device_name: str = Form("")):
+    """设置或清除当前稳定设备 ID 的自定义名称。"""
+    stable_id = _normalize_device_id(device_id) if device_id.strip() else ""
+    if not stable_id:
+        return {"ok": False, "error": "缺少 device_id"}
+
+    name = _clean_device_alias(device_name)
+    if not name:
+        device_names.pop(stable_id, None)
+    else:
+        device_names[stable_id] = name
+
+    _save_device_names()
+    _refresh_online_device_name(stable_id)
+    await _broadcast_device_list()
+    alias = _get_device_alias(stable_id)
+    info = _get_client_info_by_device_id(stable_id) or {}
+    display_name = info.get("name") or _build_device_name(alias, "未知浏览器", "unknown")
+    return {
+        "ok": True,
+        "device_id": stable_id,
+        "custom_name": device_names.get(stable_id, ""),
+        "alias": alias,
+        "device_name": display_name,
+    }
+
+
 # ========== WebSocket - 设备连接与消息 ==========
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -353,7 +433,7 @@ async def websocket_endpoint(websocket: WebSocket):
         device_id = uuid.uuid4().hex
         browser = _detect_browser(websocket.headers.get("user-agent", ""))
 
-    device_alias = _generate_device_alias(device_id)
+    device_alias = _get_device_alias(device_id)
     device_name = _build_device_name(device_alias, browser, client_ip)
 
     connected_clients[client_id] = websocket
@@ -373,6 +453,8 @@ async def websocket_endpoint(websocket: WebSocket):
         "type": "registered",
         "client_id": client_id,
         "device_id": device_id,
+        "custom_name": device_names.get(device_id, ""),
+        "alias": device_alias,
         "my_name": device_name,
     }))
 

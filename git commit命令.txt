@@ -1,0 +1,5 @@
+git status --short
+git branch --show-current
+git add -A
+git commit -m "chore: 提交当前更改"
+git status --short

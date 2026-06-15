@@ -10,16 +10,19 @@
 body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif; background: #f0f2f5; color: #333; min-height: 100vh; }
 
 /* ========== 顶部导航 ========== */
-.top-bar { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 12px rgba(0,0,0,0.15); position: sticky; top: 0; z-index: 100; }
+.top-bar { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; gap: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.15); position: sticky; top: 0; z-index: 100; }
 .top-bar h1 { font-size: 20px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.top-actions { display: flex; align-items: center; gap: 12px; }
 .top-bar .status { font-size: 13px; opacity: 0.9; display: flex; align-items: center; gap: 6px; }
+.lang-toggle { border: 1px solid rgba(255,255,255,0.45); background: rgba(255,255,255,0.16); color: white; border-radius: 999px; padding: 6px 10px; min-width: 72px; cursor: pointer; font-size: 13px; font-weight: 600; transition: background 0.2s, border-color 0.2s; }
+.lang-toggle:hover { background: rgba(255,255,255,0.24); border-color: rgba(255,255,255,0.7); }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #4ade80; animation: pulse 2s infinite; }
 .status-dot.offline { background: #f87171; animation: none; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 /* ========== 主布局 ========== */
 .main-container { max-width: 1200px; margin: 0 auto; padding: 20px; display: grid; grid-template-columns: 300px 1fr; gap: 20px; min-height: calc(100vh - 64px); }
-@media (max-width: 768px) { .main-container { grid-template-columns: 1fr; } }
+@media (max-width: 768px) { .top-bar { padding: 14px 16px; } .top-actions { gap: 8px; } .main-container { grid-template-columns: 1fr; } }
 
 /* ========== 侧边栏（设备列表） ========== */
 .sidebar { background: white; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); overflow: hidden; display: flex; flex-direction: column; height: fit-content; max-height: calc(100vh - 104px); position: sticky; top: 64px; }
@@ -121,6 +124,19 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-s
 .tab-content { display: none; }
 .tab-content.active { display: block; }
 
+/* ========== 设置 ========== */
+.settings-section { background: white; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); overflow: hidden; }
+.settings-form { padding: 20px; display: grid; gap: 14px; max-width: 520px; }
+.field-label { font-size: 13px; font-weight: 600; color: #555; }
+.settings-input { width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 10px 12px; font-size: 14px; outline: none; transition: border-color 0.2s; }
+.settings-input:focus { border-color: #667eea; }
+.settings-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.settings-btn { border: none; padding: 10px 16px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; transition: opacity 0.2s; }
+.settings-btn:hover { opacity: 0.9; }
+.settings-btn.primary { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
+.settings-btn.secondary { background: #eee; color: #555; }
+.device-id-text { color: #999; font-size: 12px; overflow-wrap: anywhere; }
+
 /* ========== 设备选择弹窗 ========== */
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.4); z-index: 200; display: none; align-items: center; justify-content: center; }
 .modal-overlay.active { display: flex; }
@@ -137,10 +153,13 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-s
 
 <!-- ====== 顶部导航 ====== -->
 <div class="top-bar">
-    <h1>📁 文件传输工具</h1>
-    <div class="status">
-        <span class="status-dot" id="statusDot"></span>
-        <span id="statusText">连接中...</span>
+    <h1 id="appTitle">📁 文件传输工具</h1>
+    <div class="top-actions">
+        <button class="lang-toggle" id="langToggle" type="button" onclick="toggleLanguage()" title="Switch language">EN</button>
+        <div class="status">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">连接中...</span>
+        </div>
     </div>
 </div>
 
@@ -148,7 +167,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-s
 <div class="main-container">
     <!-- 侧边栏：设备列表 -->
     <div class="sidebar">
-        <div class="sidebar-header">👥 在线设备 (<span id="deviceCount">0</span>)</div>
+        <div class="sidebar-header"><span id="onlineDevicesTitle">👥 在线设备</span> (<span id="deviceCount">0</span>)</div>
         <div class="device-list" id="deviceList">
             <div class="empty-devices">等待其他设备连接...</div>
         </div>
@@ -158,16 +177,17 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-s
     <div class="content-area">
         <!-- Tab 切换 -->
         <div class="tab-bar">
-            <button class="tab-btn active" data-tab="upload">📤 上传文件</button>
-            <button class="tab-btn" data-tab="chat">💬 发送消息</button>
-            <button class="tab-btn" data-tab="files">📂 文件管理</button>
+            <button class="tab-btn active" data-tab="upload" id="uploadTabBtn">📤 上传文件</button>
+            <button class="tab-btn" data-tab="chat" id="chatTabBtn">💬 发送消息</button>
+            <button class="tab-btn" data-tab="files" id="filesTabBtn">📂 文件管理</button>
+            <button class="tab-btn" data-tab="settings" id="settingsTabBtn">⚙️ 设置</button>
         </div>
 
         <!-- Tab: 上传 -->
         <div class="tab-content active" id="tab-upload">
             <div class="selected-device-bar" id="uploadTargetBar">
-                <span>目标设备：<span class="selected-device-name" id="uploadTargetName"></span></span>
-                <span class="clear-selection" onclick="clearUploadTarget()">✕ 清除</span>
+                <span><span class="target-label">目标设备：</span><span class="selected-device-name" id="uploadTargetName"></span></span>
+                <span class="clear-selection" onclick="clearUploadTarget()">✕ <span class="clear-label">清除</span></span>
             </div>
             <div class="upload-section">
                 <div class="drop-zone" id="dropZone">
@@ -190,8 +210,8 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-s
         <!-- Tab: 聊天 -->
         <div class="tab-content" id="tab-chat">
             <div class="selected-device-bar" id="chatTargetBar">
-                <span>目标设备：<span class="selected-device-name" id="chatTargetName"></span></span>
-                <span class="clear-selection" onclick="clearChatTarget()">✕ 清除</span>
+                <span><span class="target-label">目标设备：</span><span class="selected-device-name" id="chatTargetName"></span></span>
+                <span class="clear-selection" onclick="clearChatTarget()">✕ <span class="clear-label">清除</span></span>
             </div>
             <div class="chat-section">
                 <div class="chat-messages" id="chatMessages">
@@ -207,12 +227,30 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-s
         <!-- Tab: 文件管理 -->
         <div class="tab-content" id="tab-files">
             <div class="files-section">
-                <div class="section-header" onclick="toggleSection(this)">
+                <div class="section-header" id="filesHeader" onclick="toggleSection(this)">
                     📂 已存储的文件（__FILE_RETENTION_DAYS_LABEL__内有效）
                     <span class="toggle-icon">▼</span>
                 </div>
                 <div class="file-list" id="fileList">
                     <div class="empty-files">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: 设置 -->
+        <div class="tab-content" id="tab-settings">
+            <div class="settings-section">
+                <div class="section-header" id="settingsHeader">⚙️ 设备设置</div>
+                <div class="settings-form">
+                    <label>
+                        <div class="field-label" id="deviceNameLabel">本设备名称</div>
+                        <input type="text" class="settings-input" id="deviceNameInput" maxlength="30" placeholder="例如：我的笔记本">
+                    </label>
+                    <div class="device-id-text"><span id="deviceIdLabel">设备 ID：</span><span id="deviceIdText"></span></div>
+                    <div class="settings-actions">
+                        <button class="settings-btn primary" id="saveNameBtn" onclick="saveDeviceName()">保存名称</button>
+                        <button class="settings-btn secondary" id="clearNameBtn" onclick="clearDeviceName()">恢复自动名称</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -222,9 +260,9 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-s
 <!-- ====== 弹窗：选择设备 ====== -->
 <div class="modal-overlay" id="deviceModal">
     <div class="modal">
-        <h3>📌 选择目标设备</h3>
+        <h3 id="modalTitle">📌 选择目标设备</h3>
         <div id="modalDeviceList"></div>
-        <button class="modal-close" onclick="closeModal()">取消</button>
+        <button class="modal-close" id="modalCancelBtn" onclick="closeModal()">取消</button>
     </div>
 </div>
 
@@ -237,12 +275,222 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-s
 let ws = null;
 let myClientId = '';         // WebSocket client_id（仅表示当前连接）
 let myDeviceId = getOrCreateDeviceId(); // 稳定设备 ID（用于刷新/重连后的权限校验）
-let myName = '未知设备';
+let myName = '';
+let myAlias = '';
+let myCustomName = '';
 let devices = [];       // 在线设备列表 [{id, device_id, name, ip}]
 let selectedDevice = null;   // {id, name}
 let uploadTarget = null;
 let chatTarget = null;
 const avatarColors = ['#667eea','#764ba2','#f093fb','#4facfe','#43e97b','#fa709a','#fee140','#a18cd1','#fbc2eb','#ff9a9e'];
+const MAX_FILE_SIZE_LABEL = '__MAX_FILE_SIZE_LABEL__';
+const FILE_RETENTION_DAYS_LABEL = '__FILE_RETENTION_DAYS_LABEL__';
+const translations = {
+    zh: {
+        htmlLang: 'zh-CN',
+        pageTitle: '📁 文件传输工具',
+        appTitle: '📁 文件传输工具',
+        switchLanguageTitle: '切换到英文',
+        switchLanguageText: 'EN',
+        connecting: '连接中...',
+        connected: '已连接',
+        disconnected: '已断开，重连中...',
+        connectionError: '连接异常',
+        connectedToast: '已连接到服务器',
+        registeredAs: '已注册为：{name}',
+        onlineDevices: '👥 在线设备',
+        waitingDevices: '等待其他设备连接...',
+        uploadTab: '📤 上传文件',
+        chatTab: '💬 发送消息',
+        filesTab: '📂 文件管理',
+        settingsTab: '⚙️ 设置',
+        targetDevice: '目标设备：',
+        clear: '清除',
+        dropZoneHtml: '拖拽文件到此处，或<strong>点击选择文件</strong><br>支持任意类型文件，最大 <span style="font-weight:600;color:#c62828;">{maxSize}</span>',
+        uploading: '上传中...',
+        uploadSuccess: '文件上传成功: {name}',
+        uploadFailed: '上传失败: {error}',
+        uploadFailedHttp: '上传失败 (HTTP {status})',
+        uploadNetworkError: '上传失败，请检查网络',
+        chatHint: '选择一个设备，就可以开始发送消息了 💬',
+        chatPlaceholder: '输入消息...',
+        send: '发送',
+        filesHeader: '📂 已存储的文件（{days}内有效）',
+        loading: '加载中...',
+        noFiles: '还没有文件',
+        loadFailed: '加载失败',
+        expires: '过期',
+        sentByYou: '📤 你发送的',
+        receivedByYou: '📥 你接收的',
+        downloadTitle: '下载',
+        deleteTitle: '删除',
+        deleteConfirm: '确定删除文件 "{filename}"？',
+        deleted: '文件已删除',
+        deleteFailed: '删除失败',
+        settingsHeader: '⚙️ 设备设置',
+        deviceNameLabel: '本设备名称',
+        deviceNamePlaceholder: '例如：我的笔记本',
+        deviceIdLabel: '设备 ID：',
+        saveName: '保存名称',
+        clearName: '恢复自动名称',
+        saveFailed: '保存失败',
+        saveNetworkError: '保存失败，请检查网络',
+        deviceNameSaved: '设备名已保存：{name}',
+        autoNameRestored: '已恢复自动名称',
+        modalTitle: '📌 选择目标设备',
+        cancel: '取消',
+        noOnlineDevices: '没有在线设备，无法传输',
+        deviceSelected: '已选择设备: {name}',
+        thisDevice: '此设备',
+        unknownDevice: '未知设备',
+        unknownBrowser: '未知浏览器',
+        sendFailed: '发送失败',
+        fileUploadedBy: '{name} 上传了文件: {filename}',
+        fileUploadedTo: '{from} → {to}: {filename}',
+    },
+    en: {
+        htmlLang: 'en',
+        pageTitle: '📁 File Transfer Tool',
+        appTitle: '📁 File Transfer Tool',
+        switchLanguageTitle: 'Switch to Chinese',
+        switchLanguageText: '中文',
+        connecting: 'Connecting...',
+        connected: 'Connected',
+        disconnected: 'Disconnected, reconnecting...',
+        connectionError: 'Connection error',
+        connectedToast: 'Connected to server',
+        registeredAs: 'Registered as: {name}',
+        onlineDevices: '👥 Online Devices',
+        waitingDevices: 'Waiting for other devices...',
+        uploadTab: '📤 Upload Files',
+        chatTab: '💬 Send Message',
+        filesTab: '📂 File Manager',
+        settingsTab: '⚙️ Settings',
+        targetDevice: 'Target device: ',
+        clear: 'Clear',
+        dropZoneHtml: 'Drag files here, or <strong>click to choose files</strong><br>Any file type supported, max <span style="font-weight:600;color:#c62828;">{maxSize}</span>',
+        uploading: 'Uploading...',
+        uploadSuccess: 'File uploaded: {name}',
+        uploadFailed: 'Upload failed: {error}',
+        uploadFailedHttp: 'Upload failed (HTTP {status})',
+        uploadNetworkError: 'Upload failed. Check your network.',
+        chatHint: 'Select a device to start sending messages 💬',
+        chatPlaceholder: 'Type a message...',
+        send: 'Send',
+        filesHeader: '📂 Stored Files (valid for {days})',
+        loading: 'Loading...',
+        noFiles: 'No files yet',
+        loadFailed: 'Failed to load',
+        expires: 'Expires',
+        sentByYou: '📤 Sent by you',
+        receivedByYou: '📥 Received by you',
+        downloadTitle: 'Download',
+        deleteTitle: 'Delete',
+        deleteConfirm: 'Delete file "{filename}"?',
+        deleted: 'File deleted',
+        deleteFailed: 'Delete failed',
+        settingsHeader: '⚙️ Device Settings',
+        deviceNameLabel: 'This Device Name',
+        deviceNamePlaceholder: 'Example: My laptop',
+        deviceIdLabel: 'Device ID: ',
+        saveName: 'Save Name',
+        clearName: 'Restore Auto Name',
+        saveFailed: 'Save failed',
+        saveNetworkError: 'Save failed. Check your network.',
+        deviceNameSaved: 'Device name saved: {name}',
+        autoNameRestored: 'Auto name restored',
+        modalTitle: '📌 Select Target Device',
+        cancel: 'Cancel',
+        noOnlineDevices: 'No online devices available',
+        deviceSelected: 'Selected device: {name}',
+        thisDevice: 'this device',
+        unknownDevice: 'Unknown device',
+        unknownBrowser: 'Unknown browser',
+        sendFailed: 'Send failed',
+        fileUploadedBy: '{name} uploaded a file: {filename}',
+        fileUploadedTo: '{from} → {to}: {filename}',
+    },
+};
+let currentLang = detectInitialLanguage();
+
+function detectInitialLanguage() {
+    const saved = localStorage.getItem('filetransfer_lang');
+    if (saved === 'zh' || saved === 'en') return saved;
+    const browserLang = (navigator.languages?.[0] || navigator.language || '').toLowerCase();
+    return browserLang.startsWith('zh') ? 'zh' : 'en';
+}
+
+function t(key, vars = {}) {
+    const template = translations[currentLang][key] || translations.zh[key] || key;
+    return template.replace(/\{(\w+)\}/g, (_, name) => vars[name] ?? '');
+}
+
+function setText(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value;
+}
+
+function getRetentionDaysLabel() {
+    if (currentLang === 'zh') return FILE_RETENTION_DAYS_LABEL;
+    const days = FILE_RETENTION_DAYS_LABEL.match(/\d+/)?.[0] || FILE_RETENTION_DAYS_LABEL;
+    return days === '1' ? '1 day' : `${days} days`;
+}
+
+function setLanguage(lang, persist = true) {
+    currentLang = lang === 'zh' ? 'zh' : 'en';
+    if (persist) localStorage.setItem('filetransfer_lang', currentLang);
+    document.documentElement.lang = t('htmlLang');
+    document.title = t('pageTitle');
+
+    setText('appTitle', t('appTitle'));
+    setText('statusText', ws?.readyState === WebSocket.OPEN ? t('connected') : t('connecting'));
+    setText('onlineDevicesTitle', t('onlineDevices'));
+    setText('uploadTabBtn', t('uploadTab'));
+    setText('chatTabBtn', t('chatTab'));
+    setText('filesTabBtn', t('filesTab'));
+    setText('settingsTabBtn', t('settingsTab'));
+    setText('sendBtn', t('send'));
+    setText('filesHeader', t('filesHeader', { days: getRetentionDaysLabel() }));
+    setText('settingsHeader', t('settingsHeader'));
+    setText('deviceNameLabel', t('deviceNameLabel'));
+    setText('deviceIdLabel', t('deviceIdLabel'));
+    setText('saveNameBtn', t('saveName'));
+    setText('clearNameBtn', t('clearName'));
+    setText('modalTitle', t('modalTitle'));
+    setText('modalCancelBtn', t('cancel'));
+
+    document.querySelectorAll('.target-label').forEach(el => { el.textContent = t('targetDevice'); });
+    document.querySelectorAll('.clear-label').forEach(el => { el.textContent = t('clear'); });
+    document.querySelectorAll('.empty-devices').forEach(el => { el.textContent = t('waitingDevices'); });
+    document.querySelectorAll('.empty-files').forEach(el => {
+        if (el.dataset.state === 'loading') el.textContent = t('loading');
+        else if (el.dataset.state === 'error') el.textContent = t('loadFailed');
+        else el.textContent = t('noFiles');
+    });
+
+    const dropText = document.querySelector('.drop-zone-text');
+    if (dropText) dropText.innerHTML = t('dropZoneHtml', { maxSize: MAX_FILE_SIZE_LABEL });
+    const progressText = document.getElementById('progressText');
+    if (progressText && !document.getElementById('uploadProgress').classList.contains('active')) progressText.textContent = t('uploading');
+    const chatInput = document.getElementById('chatInput');
+    if (chatInput) chatInput.placeholder = t('chatPlaceholder');
+    const deviceNameInput = document.getElementById('deviceNameInput');
+    if (deviceNameInput) deviceNameInput.placeholder = t('deviceNamePlaceholder');
+    const hint = document.querySelector('.no-chat-hint');
+    if (hint) hint.textContent = t('chatHint');
+    const toggle = document.getElementById('langToggle');
+    if (toggle) {
+        toggle.textContent = t('switchLanguageText');
+        toggle.title = t('switchLanguageTitle');
+    }
+
+    renderDeviceList();
+    loadFiles();
+}
+
+function toggleLanguage() {
+    setLanguage(currentLang === 'zh' ? 'en' : 'zh');
+}
 
 // ========== 设备名称颜色 ==========
 function getAvatarColor(name) {
@@ -252,7 +500,7 @@ function getAvatarColor(name) {
 }
 
 function getDeviceTitle(device) {
-    return device.alias || device.name || '未知设备';
+    return device.alias || device.name || t('unknownDevice');
 }
 
 function isCurrentDevice(device) {
@@ -261,7 +509,7 @@ function isCurrentDevice(device) {
 
 function getDisplayDeviceTitle(device) {
     const title = getDeviceTitle(device);
-    return isCurrentDevice(device) ? `${title}（此设备）` : title;
+    return isCurrentDevice(device) ? `${title} (${t('thisDevice')})` : title;
 }
 
 function getDeviceMeta(device) {
@@ -276,7 +524,7 @@ function detectBrowser() {
     if (ua.includes('SamsungBrowser/')) return 'Samsung Internet';
     if (ua.includes('Chrome/') || ua.includes('CriOS/')) return 'Chrome';
     if (ua.includes('Safari/')) return 'Safari';
-    return '未知浏览器';
+    return t('unknownBrowser');
 }
 
 function getOrCreateDeviceId() {
@@ -304,7 +552,7 @@ function connectWS() {
 
     ws.onopen = () => {
         document.getElementById('statusDot').classList.remove('offline');
-        document.getElementById('statusText').textContent = '已连接';
+        document.getElementById('statusText').textContent = t('connected');
         // 发送浏览器信息，设备名由服务端自动生成
         ws.send(JSON.stringify({
             type: 'register',
@@ -312,7 +560,7 @@ function connectWS() {
             browser: detectBrowser(),
             user_agent: navigator.userAgent,
         }));
-        showToast('✅', '已连接到服务器');
+        showToast('✅', t('connectedToast'));
     };
 
     ws.onmessage = (e) => {
@@ -322,7 +570,10 @@ function connectWS() {
                 myClientId = msg.client_id;
                 myDeviceId = msg.device_id || myDeviceId;
                 myName = msg.my_name || myName;
-                showToast('🔑', `已注册为：${myName}`);
+                myAlias = msg.alias || myAlias;
+                myCustomName = msg.custom_name || '';
+                syncDeviceNameInput();
+                showToast('🔑', t('registeredAs', { name: myName }));
                 break;
             case 'device_list':
                 devices = msg.devices;
@@ -332,13 +583,13 @@ function connectWS() {
                 addChatMessage(msg.from_name, msg.content, msg.timestamp);
                 break;
             case 'error':
-                showToast('⚠️', msg.message || '发送失败');
+                showToast('⚠️', msg.message || t('sendFailed'));
                 break;
             case 'new_file':
                 if (msg.to_name) {
-                    showToast('📁', `${msg.from_name} → ${msg.to_name}: ${msg.filename}`);
+                    showToast('📁', t('fileUploadedTo', { from: msg.from_name, to: msg.to_name, filename: msg.filename }));
                 } else {
-                    showToast('📁', `${msg.from_name} 上传了文件: ${msg.filename}`);
+                    showToast('📁', t('fileUploadedBy', { name: msg.from_name, filename: msg.filename }));
                 }
                 loadFiles();
                 break;
@@ -350,13 +601,13 @@ function connectWS() {
 
     ws.onclose = () => {
         document.getElementById('statusDot').classList.add('offline');
-        document.getElementById('statusText').textContent = '已断开，重连中...';
+        document.getElementById('statusText').textContent = t('disconnected');
         setTimeout(connectWS, 3000); // 3秒后重试
     };
 
     ws.onerror = () => {
         document.getElementById('statusDot').classList.add('offline');
-        document.getElementById('statusText').textContent = '连接异常';
+        document.getElementById('statusText').textContent = t('connectionError');
     };
 }
 
@@ -367,7 +618,7 @@ function renderDeviceList() {
     countEl.textContent = devices.length;
 
     if (devices.length === 0) {
-        el.innerHTML = '<div class="empty-devices">等待其他设备连接...</div>';
+        el.innerHTML = `<div class="empty-devices">${t('waitingDevices')}</div>`;
         return;
     }
 
@@ -391,14 +642,21 @@ function selectDevice(id, name) {
     // 移除聊天区域的提示语
     const hint = document.querySelector('.no-chat-hint');
     if (hint) hint.style.display = 'none';
-    showToast('📌', `已选择设备: ${name}`);
+    showToast('📌', t('deviceSelected', { name }));
+}
+
+function syncDeviceNameInput() {
+    const input = document.getElementById('deviceNameInput');
+    const idText = document.getElementById('deviceIdText');
+    if (input) input.value = myCustomName || '';
+    if (idText) idText.textContent = myDeviceId || '';
 }
 
 // ========== 弹窗：选择上传/聊天目标 ==========
 let modalCallback = null;
 function openModal(callback) {
     if (devices.length === 0) {
-        showToast('⚠️', '没有在线设备，无法传输');
+        showToast('⚠️', t('noOnlineDevices'));
         return;
     }
     modalCallback = callback;
@@ -483,19 +741,19 @@ function uploadFile(file, targetId) {
         if (xhr.status === 200) {
             const res = JSON.parse(xhr.responseText);
             if (res.ok) {
-                showToast('✅', `文件上传成功: ${file.name}`);
+                showToast('✅', t('uploadSuccess', { name: file.name }));
                 loadFiles(); // 刷新文件列表
             } else {
-                showToast('❌', `上传失败: ${res.error || '未知错误'}`);
+                showToast('❌', t('uploadFailed', { error: res.error || t('unknownDevice') }));
             }
         } else {
-            showToast('❌', `上传失败 (HTTP ${xhr.status})`);
+            showToast('❌', t('uploadFailedHttp', { status: xhr.status }));
         }
     });
 
     xhr.addEventListener('error', () => {
         progress.classList.remove('active');
-        showToast('❌', '上传失败，请检查网络');
+        showToast('❌', t('uploadNetworkError'));
     });
 
     text.textContent = `${file.name} (${formatSize(file.size)})`;
@@ -542,6 +800,36 @@ function clearUploadTarget() {
     document.getElementById('uploadTargetBar').classList.remove('active');
 }
 
+function saveDeviceName() {
+    const input = document.getElementById('deviceNameInput');
+    const name = input.value.trim();
+    const formData = new FormData();
+    formData.append('device_id', myDeviceId);
+    formData.append('device_name', name);
+
+    fetch('/device-name', { method: 'POST', body: formData })
+        .then(r => r.json())
+        .then(data => {
+            if (!data.ok) {
+                showToast('❌', data.error || t('saveFailed'));
+                return;
+            }
+            myCustomName = data.custom_name || '';
+            myAlias = data.alias || myAlias;
+            myName = data.device_name || myName;
+            syncDeviceNameInput();
+            loadFiles();
+            showToast('✅', myCustomName ? t('deviceNameSaved', { name: myCustomName }) : t('autoNameRestored'));
+        })
+        .catch(() => showToast('❌', t('saveNetworkError')));
+}
+
+function clearDeviceName() {
+    const input = document.getElementById('deviceNameInput');
+    input.value = '';
+    saveDeviceName();
+}
+
 function clearChatTarget() {
     chatTarget = null;
     selectedDevice = null;
@@ -559,7 +847,7 @@ function loadFiles() {
         .then(data => {
             const el = document.getElementById('fileList');
             if (data.files.length === 0) {
-                el.innerHTML = '<div class="empty-files">还没有文件</div>';
+                el.innerHTML = `<div class="empty-files" data-state="empty">${t('noFiles')}</div>`;
                 return;
             }
             el.innerHTML = data.files.map(f => `
@@ -570,28 +858,31 @@ function loadFiles() {
                         <div class="file-meta">
                             <span>${formatSize(f.size)}</span>
                             <span>📅 ${f.time}</span>
-                            <span>⏰ 过期: ${f.expires_at}</span>
-                            ${f.role === 'sent' ? '<span style="color:#667eea">📤 你发送的</span>' : ''}
-                            ${f.role === 'received' ? '<span style="color:#43e97b">📥 你接收的</span>' : ''}
+                            <span>⏰ ${t('expires')}: ${f.expires_at}</span>
+                            ${f.role === 'sent' ? `<span style="color:#667eea">${t('sentByYou')}</span>` : ''}
+                            ${f.role === 'received' ? `<span style="color:#43e97b">${t('receivedByYou')}</span>` : ''}
                         </div>
                     </div>
                     <div class="file-actions">
-                        <a class="btn-download" href="${appendIdentity('/download/' + encodeURIComponent(f.name))}" target="downloadFrame" title="下载">⬇️</a>
-                        <button class="btn-delete" onclick="deleteFile('${escHtml(f.name)}')" title="删除">🗑️</button>
+                        <a class="btn-download" href="${appendIdentity('/download/' + encodeURIComponent(f.name))}" target="downloadFrame" title="${t('downloadTitle')}">⬇️</a>
+                        <button class="btn-delete" onclick="deleteFile('${escHtml(f.name)}')" title="${t('deleteTitle')}">🗑️</button>
                     </div>
                 </div>
             `).join('');
         })
-        .catch(() => { el.innerHTML = '<div class="empty-files">加载失败</div>'; });
+        .catch(() => {
+            const el = document.getElementById('fileList');
+            el.innerHTML = `<div class="empty-files" data-state="error">${t('loadFailed')}</div>`;
+        });
 }
 
 function deleteFile(filename) {
-    if (!confirm(`确定删除文件 "${filename}"？`)) return;
+    if (!confirm(t('deleteConfirm', { filename }))) return;
     fetch(appendIdentity(`/delete/${encodeURIComponent(filename)}`), { method: 'POST' })
         .then(r => r.json())
         .then(data => {
-            if (data.ok) showToast('🗑️', '文件已删除');
-            else showToast('❌', data.error || '删除失败');
+            if (data.ok) showToast('🗑️', t('deleted'));
+            else showToast('❌', data.error || t('deleteFailed'));
             loadFiles();
         });
 }
@@ -658,8 +949,8 @@ function escHtml(str) {
 }
 
 // ========== 初始化 ==========
+setLanguage(currentLang, false);
 connectWS();
-loadFiles();
 setInterval(loadFiles, 15000); // 每15秒刷新文件列表
 </script>
 </body>
