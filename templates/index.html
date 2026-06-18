@@ -698,11 +698,14 @@ dropZone.addEventListener('drop', (e) => {
 });
 fileInput.addEventListener('change', () => {
     if (!fileInput.files.length) return;
-    handleFiles(fileInput.files);
+    handleFiles(Array.from(fileInput.files));
     fileInput.value = '';
 });
 
 function handleFiles(files) {
+    const selectedFiles = Array.from(files);
+    if (!selectedFiles.length) return;
+
     // 先选目标设备
     const chooseTarget = ({ id, name }) => {
         uploadTarget = { id, name };
@@ -710,7 +713,7 @@ function handleFiles(files) {
         document.getElementById('uploadTargetBar').classList.add('active');
 
         // 逐个上传
-        Array.from(files).forEach((file, i) => {
+        selectedFiles.forEach((file, i) => {
             setTimeout(() => uploadFile(file, id), i * 200);
         });
     };
