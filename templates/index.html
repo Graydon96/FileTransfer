@@ -196,7 +196,7 @@ body { font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-s
                         拖拽文件到此处，或<strong>点击选择文件</strong><br>
                         支持任意类型文件，最大 <span style="font-weight:600;color:#c62828;">__MAX_FILE_SIZE_LABEL__</span>
                     </div>
-                    <input type="file" class="file-input" id="fileInput">
+                    <input type="file" class="file-input" id="fileInput" multiple>
                 </div>
                 <div class="upload-progress" id="uploadProgress">
                     <div class="progress-bar-container">
@@ -696,7 +696,11 @@ dropZone.addEventListener('drop', (e) => {
     dropZone.classList.remove('dragover');
     if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
 });
-fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFiles(fileInput.files); });
+fileInput.addEventListener('change', () => {
+    if (!fileInput.files.length) return;
+    handleFiles(fileInput.files);
+    fileInput.value = '';
+});
 
 function handleFiles(files) {
     // 先选目标设备
