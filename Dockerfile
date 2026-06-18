@@ -13,4 +13,6 @@ EXPOSE 8080
 ENV MAX_FILE_SIZE=2GB
 ENV FILE_RETENTION_DAYS=3
 
+VOLUME ["/data/conf"]
+
 CMD ["python", "main.py"]

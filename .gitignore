@@ -32,6 +32,8 @@ htmlcov/
 # Runtime uploads and generated metadata
 uploads/*
 !uploads/.gitkeep
+conf/*
+!conf/.gitkeep
 device_names.json
 
 # Logs and local runtime files
@@ -54,4 +56,3 @@ desktop.ini
 agent.md
 .bat
 .txt
-device_names.json

@@ -24,7 +24,8 @@ import uvicorn
 
 # ========== 配置 ==========
 UPLOAD_DIR = Path(__file__).parent / "uploads"
-DEVICE_NAMES_FILE = Path(__file__).parent / "device_names.json"
+CONF_DIR = Path(__file__).parent / "conf"
+DEVICE_NAMES_FILE = CONF_DIR / "device_names.json"
 FILE_RETENTION_DAYS = 3          # 文件保留天数
 FILE_RETENTION_DAYS = int(os.getenv("FILE_RETENTION_DAYS", str(FILE_RETENTION_DAYS)))
 HOST = "0.0.0.0"                # 监听所有网卡（局域网可访问）
@@ -168,6 +169,7 @@ def _load_device_names():
 
 def _save_device_names():
     """将自定义设备名保存到 JSON 文件。"""
+    CONF_DIR.mkdir(parents=True, exist_ok=True)
     with open(DEVICE_NAMES_FILE, "w", encoding="utf-8") as f:
         json.dump(device_names, f, ensure_ascii=False, indent=2)
 
@@ -356,6 +358,7 @@ def _safe_filename_label(value: str) -> str:
 async def lifespan(app: FastAPI):
     """启动时创建目录、加载元数据并定期清理"""
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    CONF_DIR.mkdir(parents=True, exist_ok=True)
     _load_device_names()
     _load_file_metadata()  # 恢复持久化的文件元数据
     cleanup_old_files()
