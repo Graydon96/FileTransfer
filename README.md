@@ -19,7 +19,7 @@ Set the max upload size with `MAX_FILE_SIZE`, and the stored file retention peri
 Supported size formats include `500MB`, `2GB`, and raw bytes such as `1073741824`. `FILE_RETENTION_DAYS` is a number of days.
 
 ```bash
-docker run -d --name filetransfer -p 8080:8080 -v ./conf:/data/conf -e MAX_FILE_SIZE=5GB -e FILE_RETENTION_DAYS=7 graydon96/filetransfer:latest
+docker run -d --name filetransfer -p 8080:8080 -v ./conf:/data/conf -v ./uploads:/data/uploads -e MAX_FILE_SIZE=5GB -e FILE_RETENTION_DAYS=7 graydon96/filetransfer:latest
 ```
 
 ## 中文
@@ -39,5 +39,5 @@ python main.py
 支持的大小格式包括 `500MB`、`2GB`，也可以直接填写字节数，例如 `1073741824`。`FILE_RETENTION_DAYS` 的值为天数。
 
 ```bash
-docker run -d --name filetransfer -p 8080:8080 -v ./conf:/data/conf -e MAX_FILE_SIZE=5GB -e FILE_RETENTION_DAYS=7 graydon96/filetransfer:latest
+docker run -d --name filetransfer -p 8080:8080 -v ./conf:/data/conf -v ./uploads:/data/uploads -e MAX_FILE_SIZE=5GB -e FILE_RETENTION_DAYS=7 graydon96/filetransfer:latest
 ```
