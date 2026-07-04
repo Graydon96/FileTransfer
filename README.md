@@ -4,7 +4,9 @@
 
 ## English
 
-Transfer files between different devices without login via different network
+Transfer files between different devices without login via different network.
+Upload files to the server first, then download it from receiver.
+The uploaded file only can be seen from sender and receiver.
 
 ### For normal use
 
