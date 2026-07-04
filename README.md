@@ -26,7 +26,7 @@ docker run -d --name filetransfer -p 8080:8080 -v ./conf:/data/conf -v ./uploads
 
 FileTransfer 可以在不同网络的设备之间免登录传输文件。
 
-### 普通方式运行
+### 服务端普通方式运行
 
 ```bash
 python main.py
@@ -41,3 +41,8 @@ python main.py
 ```bash
 docker run -d --name filetransfer -p 8080:8080 -v ./conf:/data/conf -v ./uploads:/data/uploads -e MAX_FILE_SIZE=5GB -e FILE_RETENTION_DAYS=7 graydon96/filetransfer:latest
 ```
+
+### 使用
+
+传送文件：在发送端和接收端同时打开[ip]:8080，点击上传文件，选择设备，接收端在文件管理即可看到文件，文件只对发送方和接收方可见
+传送文字：先选择要发送的文字，输入框才能变成可选状态
